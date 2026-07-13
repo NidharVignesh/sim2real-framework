@@ -1,33 +1,101 @@
 # Sim-to-Real Deployment Framework for RL-based Robots
-
+ 
 ## Overview
-
-This project builds a reusable framework that automatically converts a robot policy trained in simulation (MuJoCo + PPO) into working code deployable on real hardware (ESP32/M5Atom) — replacing the current manual conversion and deployment process.
-
-The framework is scoped to: **MuJoCo (simulation) + PPO/Stable-Baselines3 (training) + ESP32-class microcontrollers (real hardware)**.
-
+ 
+This project builds a reusable framework that automatically converts a robot policy trained in simulation (MuJoCo + PPO) into working code deployable on real hardware (ESP32) — replacing the current manual conversion and deployment process.
+ 
+The framework is scoped to: **MuJoCo (simulation) + PPO/Stable-Baselines3 (training) + ESP32-class microcontroller (real hardware)**.
+ 
 The open-source [SelfRisingRobot](https://github.com/homemadegarbage/SelfRisingRobot) project is used as the example case to build, test, and validate the framework.
-
+ 
 ---
-
+ 
 ## Problem
-
-When a robot policy is trained using reinforcement learning, it is trained inside a simulator like MuJoCo, not on the real robot directly. Once training is done, that policy needs to be moved onto the real robot so it can actually control the servos and sensors. But right now, there is no automatic or reusable way to do this move.
-
-Currently, taking a trained simulation policy and getting it to run on real hardware is a manual process. Someone has to hand-convert the trained model into a format the microcontroller (like Arduino/ESP32) can understand, and then hand-write the deployment code specifically for that one robot. This means every time someone builds a new robot or updates the training, they have to repeat this manual conversion and deployment work all over again from scratch.
-
+ 
+A robot is trained in a simulator like MuJoCo, not on the real robot. Once training is done, that trained policy has to be moved onto the real robot. Right now there is no automatic way to do this move.
+ 
+Moving a trained policy to real hardware is currently a manual process. Someone has to hand-convert the trained model into code the microcontroller can run, and hand-write the deployment code for that one robot. This has to be redone from scratch for every new robot.
+ 
 ## Current Solution
-
-An example of this manual process can be seen in the SelfRisingRobot project. A small robot is trained in MuJoCo using PPO, and once training is finished, the trained model is manually converted into a C code file and manually written into Arduino code to run on an ESP32. This works for that one specific robot, but the conversion and deployment steps are all done by hand, with no reusable tool or framework behind it. General tools exist for deploying neural networks to microcontrollers, and individual sim-to-real techniques exist in research literature, but to the best of our knowledge, no existing framework combines these specifically for MuJoCo-trained PPO policies being deployed to ESP32-based robots.
-
+ 
+The SelfRisingRobot project shows this manual process. A robot is trained in MuJoCo with PPO, then the trained model is manually converted into a C file and manually written into Arduino code for an ESP32/M5Atom chip. This works, but only for this one robot, and only by doing everything by hand. To the best of our knowledge, no existing framework automates this conversion and deployment process for MuJoCo/PPO-trained policies going to ESP32 hardware.
+ 
 ## Feasibility
-
-- Building a framework that converts simulation code into working real-world code, as long as the requirements set in the simulation are fulfilled.
-- To make this feasible, the framework is narrowed to only what is used in the SelfRisingRobot project: MuJoCo for simulation, PPO for training, and ESP32/M5Atom as the hardware controller.
-- For the example and testing, this exact open-source project will be built, so there is a real, working case to develop and prove the framework on.
-- Since the framework only needs to work for this one specific tool combination, and not for every possible robot or simulator, the amount of work stays realistic and achievable within one semester.
-
+ 
+- The framework converts simulation code into working real-world code, as long as the simulation's requirements are met.
+- The scope is narrowed to only what SelfRisingRobot uses: MuJoCo, PPO, and ESP32/M5Atom.
+- SelfRisingRobot will be built and used as the working test case for the framework.
+- Because the framework only targets this one tool combination, not every possible robot or simulator, the workload stays realistic for one semester.
 ---
+
+#Planned repo structure
+
+```
+sim2real-framework/
+├── configs/
+│   └── robo1.yaml                  # the single source-of-truth config
+├── generators/
+│   ├── yaml_to_mjcf.py             # builds MJCF from YAML
+│   └── yaml_to_arduino.py          # builds Arduino skeleton from YAML
+├── templates/
+│   ├── mjcf_template.xml           # base MJCF structure with placeholders
+│   └── arduino_template.ino        # base Arduino structure with placeholders
+├── training/
+│   ├── env_builder.py              # builds Gymnasium env from generated MJCF
+│   └── train.py                    # PPO training script (generic, config-driven)
+├── export/
+│   └── export_policy_header.py     # generic policy → C header exporter
+├── assets/
+│   └── robo1/                      # STL mesh files
+├── evaluation/
+│   ├── eval_sim.py                 # time-to-upright + failure rate in sim
+│   └── eval_real.py                # same metrics logged from real hardware (serial input)
+└── README.md
+```
+ 
+## Proposed Plan
+ 
+A single YAML config file describes a robot (joints, actuators, sensor, hardware pins). The framework reads this file and generates everything needed for both simulation and real hardware from it, so the robot only has to be defined once.
+ 
+```
+                        robot_config.yaml
+                              |
+              -----------------------------------
+              |                                 |
+      yaml_to_mjcf.py                   yaml_to_arduino.py
+              |                                 |
+      MuJoCo model (.xml)              Arduino sketch skeleton
+              |
+      Gymnasium environment
+              |
+      PPO training (Stable-Baselines3)
+              |
+      Trained policy (.zip)
+              |
+      Generic policy exporter
+              |
+      C header file (policy weights)
+              |
+      Generic C++ inference runner  ---->  Flash to ESP32
+                                                  |
+                                          Run on real robot
+                                                  |
+                                    Log time-to-upright + failure rate
+                                                  |
+                                    Compare against simulation results
+```
+ 
+The key idea: instead of hand-writing the MJCF model and the Arduino code separately for every robot, both are generated from the same config file, so updating the robot only means updating the YAML.
+ 
+## Current Planned Approach
+ 
+1. Build and run the existing SelfRisingRobot project as-is, to fully understand its MuJoCo model, training script, and Arduino deployment code.
+2. Identify every value in that project that is hardcoded but could instead come from a config file (joint ranges, servo pins, sensor type, actuator limits).
+3. Design the YAML schema based on those values.
+4. Build the generator scripts that turn a YAML file into a working MJCF model and a working Arduino sketch.
+5. Build a generic policy exporter and a generic inference runner, so any trained policy (not just this one robot's) can be converted and deployed.
+6. Add sim-to-real robustness options (domain randomization, actuator delay modeling) into the training step, as configurable options in the framework.
+7. Test the full framework end-to-end using SelfRisingRobot as the example robot, and compare its results (time-to-upright, failure rate) against the original hand-built version.
 
 ## Weekly Task Checklist
 
