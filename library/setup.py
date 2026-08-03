@@ -8,6 +8,7 @@ setup(
         "numpy",
         "torch",
         "stable-baselines3",
+        "pyyaml",
     ],
     entry_points={
         "console_scripts": [
