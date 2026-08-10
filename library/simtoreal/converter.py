@@ -1,12 +1,12 @@
 from pathlib import Path
 from .loaders import load_sb3_policy, load_torch_policy
-from .exporter import generate_header
+from .exporter import generate_header , generate_python_network
 from .interface import generate_interface
 from typing import Optional
 
-def convert(model_path: str, output_path: str = "policy_network.h", config_path: Optional[str] = None):
+def convert(model_path: str, output_path: str = "policy_network.py", config_path: Optional[str] = None,lang: str = "python"):
     """
-    Convert a trained policy to a C header file.
+    Convert a trained policy to a runnable network file.
 
     Parameters
     ----------
@@ -14,6 +14,9 @@ def convert(model_path: str, output_path: str = "policy_network.h", config_path:
         Path to .zip (SB3) or .pt (PyTorch)None
     output_path : str
         Where to write the .h file
+    lang : str
+        "python" -> policy_network.py (MicroPython)
+        "c" -> policy_network.h 
     """
     path = Path(model_path)
 
@@ -24,7 +27,15 @@ def convert(model_path: str, output_path: str = "policy_network.h", config_path:
     else:
         raise ValueError("Unsupported model format. Use .zip (SB3) or .pt (PyTorch)")
 
-    generate_header(network, output_path)
+
+    if lang == "python":
+        if not str(output_path).endswith(".py"):
+            output_path = str(Path(output_path).with_suffix(".py"))
+        generate_python_network(network, output_path)
+    elif lang == "c":
+        if not str(output_path).endswith(".h"):
+            output_path = str(Path(output_path).with_suffix(".h"))
+        generate_header(network, output_path)
 
     if config_path is not None:
             interface_path = str(Path(output_path).with_name(

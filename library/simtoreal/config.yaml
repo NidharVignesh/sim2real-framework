@@ -1,35 +1,29 @@
 observations:
   - name: base_roll
-    source: orientation_quaternion
-    index: 0
+    type: imu
+    axis: roll
+    scl: 21
+    sda: 20
     scale: 1.0
     offset: 0.0
+
   - name: base_pitch
-    source: orientation_quaternion
-    index: 1
-    scale: 1.0
-    offset: 0.0
-  - name: motor_0_target
-    source: internal_target_state
-    index: 2
-    scale: 1.0
-    offset: 0.0
-  - name: motor_1_target
-    source: internal_target_state
-    index: 3
+    type: imu
+    axis: pitch
+    scl: 21
+    sda: 20
     scale: 1.0
     offset: 0.0
 
 actions:
-  - name: motor_0
-    target: motor
-    index: 0
-    scale: 1.0
+  - name: servo_0
+    type: servo
+    pin: 25
     min: -1.0
     max: 1.0
-  - name: motor_1
-    target: motor
-    index: 1
-    scale: 1.0
+
+  - name: servo_1
+    type: servo
+    pin: 26
     min: -1.0
     max: 1.0
