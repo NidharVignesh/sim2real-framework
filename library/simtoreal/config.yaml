@@ -1,6 +1,7 @@
 observations:
   - name: base_roll
     type: imu
+    class: mpu6050
     axis: roll
     scl: 21
     sda: 20
@@ -9,6 +10,7 @@ observations:
 
   - name: base_pitch
     type: imu
+    class: mpu6050
     axis: pitch
     scl: 21
     sda: 20
@@ -18,12 +20,14 @@ observations:
 actions:
   - name: servo_0
     type: servo
+    class: servo
     pin: 25
     min: -1.0
     max: 1.0
 
   - name: servo_1
     type: servo
+    class: servo
     pin: 26
     min: -1.0
     max: 1.0

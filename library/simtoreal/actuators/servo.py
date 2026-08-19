@@ -1,6 +1,6 @@
 from machine import Pin, PWM
 
-class Servo:
+class servo:
     # these defaults work for the standard TowerPro SG90
     __servo_pwm_freq = 50
     __min_u10_duty = 26 - 0 # offset for correction
@@ -24,6 +24,7 @@ class Servo:
 
 
     def move(self, angle):
+        angle = max(self.min_angle, min(self.max_angle, angle))
         # round to 2 decimal places, so we have a chance of reducing unwanted servo adjustments
         angle = round(angle, 2)
         # do we need to move?
@@ -32,19 +33,20 @@ class Servo:
         self.current_angle = angle
         # calculate the new duty cycle and move the motor
         duty_u10 = self.__angle_to_u10_duty(angle)
+        if duty_u10 == self.__last_duty:
+            return
+        self.__last_duty = duty_u10
         self.__motor.duty(duty_u10)
 
     def __angle_to_u10_duty(self, angle):
         return int((angle - self.min_angle) * self.__angle_conversion_factor) + self.__min_u10_duty
 
-
     def __initialise(self, pin):
         self.current_angle = -0.001
+        self.__last_duty = None
         self.__angle_conversion_factor = (self.__max_u10_duty - self.__min_u10_duty) / (self.max_angle - self.min_angle)
         self.__motor = PWM(Pin(pin))
         self.__motor.freq(self.__servo_pwm_freq)
 
     def write(self, angle):
         self.move(angle)
-
-    

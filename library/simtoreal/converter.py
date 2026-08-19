@@ -38,9 +38,10 @@ def convert(model_path: str, output_path: str = "policy_network.py", config_path
         generate_header(network, output_path)
 
     if config_path is not None:
-            interface_path = str(Path(output_path).with_name(
-                Path(output_path).stem + "_interface.h"
-            ))
+            # interface_path = str(Path(output_path).with_name(
+            #     Path(output_path).stem + "_interface.h"
+            # ))
+            interface_path = str(Path("main.py"))
             generate_interface(config_path, interface_path)
 
     return output_path
