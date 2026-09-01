@@ -18,10 +18,10 @@ def generate_interface(config_path: str, output_path: str="main.py"):
 
     imports = set()
     for cls,type in zip(sensor_classes, sensor_types):
-        imports.add(f"from simtoreal.sensors.{type} import {cls}")
+        imports.add(f"from {type} import {cls}")
 
     for cls,type in zip(action_classes, action_types):
-        imports.add(f"from simtoreal.actions.{type} import {cls}")
+        imports.add(f"from {type} import {cls}")
 
     imports = "\n".join(imports)
 
@@ -32,7 +32,7 @@ def generate_interface(config_path: str, output_path: str="main.py"):
         observe_line+=f"obs{i} = {obs['class']}("
         for key, value in obs.items():
             if key not in ["name", "type", "class","scale","offset"]:
-                observe_line+=f"{key}={value},"
+                observe_line+=f"{key}='{value}',"
         observe_lines.append(observe_line+")")
     observe_lines = "\n".join(observe_lines)
 

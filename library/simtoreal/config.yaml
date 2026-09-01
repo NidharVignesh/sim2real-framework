@@ -3,8 +3,8 @@ observations:
     type: imu
     class: mpu6050
     axis: roll
-    scl: 21
-    sda: 20
+    scl: 22
+    sda: 21
     scale: 1.0
     offset: 0.0
 
@@ -12,8 +12,8 @@ observations:
     type: imu
     class: mpu6050
     axis: pitch
-    scl: 21
-    sda: 20
+    scl: 22
+    sda: 21
     scale: 1.0
     offset: 0.0
 
