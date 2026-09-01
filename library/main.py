@@ -3,10 +3,13 @@
 from policy_network import policy_forward
 from imu import mpu6050
 from servo import servo
+# TODO: custom imports
 
 #observations
 obs0 = mpu6050(axis='roll',scl='22',sda='21',)
 obs1 = mpu6050(axis='pitch',scl='22',sda='21',)
+# TODO: obs2 (custom_0)
+# TODO: obs3 (custom_1)
 
 #actions
 act0 = servo(pin=25,)
@@ -16,6 +19,8 @@ def observe():
     return [
         obs0.read(),
         obs1.read(),
+        # TODO: obs2 (custom_0)
+        # TODO: obs3 (custom_1)
     ]
 
 def apply_actions(actions):

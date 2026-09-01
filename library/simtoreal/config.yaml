@@ -17,6 +17,18 @@ observations:
     scale: 1.0
     offset: 0.0
 
+  - name: custom_0
+    type: custom
+    class: custom
+    scale: 1.0
+    offset: 0.0
+
+  - name: custom_1
+    type: custom
+    class: custom
+    scale: 1.0
+    offset: 0.0
+
 actions:
   - name: servo_0
     type: servo
