@@ -133,3 +133,16 @@ library/dist/
 # Large model/archive artifacts that should not be committed
 library/*.pt
 library/*.zip
+
+# LaTeX build artifacts
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
+*.toc
+*.xdv

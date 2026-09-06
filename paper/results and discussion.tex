@@ -1,0 +1,234 @@
+\documentclass[10pt,twocolumn]{article}
+
+% --- Core Packages ---
+\usepackage[utf8]{inputenc}
+\usepackage[margin=0.75in]{geometry}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{booktabs}
+\usepackage{cite}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{microtype}
+\usepackage{siunitx}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!70!black,
+    citecolor=green!50!black,
+    urlcolor=blue!80!black
+}
+
+% --- Title and Metadata ---
+\title{\textbf{\Large Automated Sim-to-Real Deployment Framework for Reinforcement Learning Control on Resource-Constrained Microcontrollers}}
+
+\author{
+    \textbf{Nidharshan V.}$^{1}$ \\
+    $^{1}$Department of Computer Science \& Engineering \\
+    \textit{University of Moratuwa } \\
+}
+
+\date{}
+
+\begin{document}
+
+\maketitle
+
+% \begin{abstract}
+% Deploying reinforcement learning (RL) policies trained in high-fidelity physics simulators to physical robotic hardware is typically hindered by significant computational overhead, complex middleware dependencies, and tedious manual translation. While high-tier quadrupedal and humanoid platforms rely on onboard single-board computers or GPUs running ROS/Linux, low-cost and miniature robots operating on microcontrollers (e.g., ESP32) lack automated sim-to-real pipelines. In this work, we introduce \texttt{simtoreal}, a lightweight, declarative Python framework that automates the extraction, optimization, and synthesis of trained PyTorch / Stable-Baselines3 policies into ready-to-flash microcontroller firmware. Given a unified YAML hardware specification, the framework synthesizes either a zero-dependency static C header with deterministically bounded execution or a native MicroPython module, while auto-wiring low-level sensor and actuator interfaces. We validate the framework on \textit{Robo1}, a custom 94.8-gram, 2-DOF dynamic self-righting robot powered by an ESP32 and an MPU-6050 IMU. Our auto-generated C header executes an actor inference pass in just \SI{74}{\micro\second} with \SI{1.2}{\kilo\byte} SRAM overhead, easily sustaining a strict \SI{50}{\hertz} control loop. Experimental trials demonstrate an \SI{88.3}{\percent} self-righting success rate across four challenging fallen orientations, proving that accurate inertial digital twins combined with automated embedded code generation successfully bridge the reality gap on low-cost hardware.
+% \end{abstract}
+
+% \textbf{\small \textit{Keywords}---Sim-to-Real Transfer, Reinforcement Learning, Microcontroller Deployment, Embedded AI, Proximal Policy Optimization, Dynamic Righting.}
+
+% ==============================================================================
+% SECTION I: INTRODUCTION
+% ==============================================================================
+\section{Introduction}
+
+
+% ==============================================================================
+% SECTION II: RELATED WORK
+% ==============================================================================
+\section{Related Work}
+
+% ==============================================================================
+% SECTION III: FRAMEWORK ARCHITECTURE
+% ==============================================================================
+\section{The \texttt{simtoreal} Framework}
+\label{sec:framework}
+
+\subsection{Policy Extractors and Loaders}
+
+\subsection{Dual-Target Code Generation}
+
+\subsection{Hardware Abstraction and Driver Synthesis}
+
+% ==============================================================================
+% SECTION IV: EXPERIMENTAL TESTBED: ROBO1
+% ==============================================================================
+\section{Experimental Testbed: Robo1}
+\label{sec:testbed}
+
+To evaluate the framework, we constructed \textit{Robo1}, a low-cost, 2-DOF self-righting bipedal robot (mass $M = \SI{94.8}{\gram}$, height $H = \SI{145}{\milli\meter}$). 
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}
+    % Conceptual mechanical schematic of Robo1
+    \draw[fill=red!20, draw=red!80, thick, rounded corners=3pt] (-1.2, 0) rectangle (1.2, 0.4);
+    \node at (0, 0.2) {\textbf{Base Foot} (37.5\,g)};
+    
+    \draw[fill=blue!30, draw=blue!80] (-0.8, 0.4) rectangle (-0.2, 0.65);
+    \node[font=\tiny] at (-0.5, 0.525) {ESP32};
+    \draw[fill=green!30, draw=green!80] (0.2, 0.4) rectangle (0.8, 0.65);
+    \node[font=\tiny] at (0.5, 0.525) {MPU6050};
+
+    \filldraw[fill=gray!50, draw=black] (0, 0.4) circle (0.15);
+    \node[font=\tiny, right] at (0.18, 0.4) {Joint 1 (Roll)};
+
+    \draw[line width=3.5pt, draw=orange!80] (0, 0.4) -- (0, 1.4);
+    \node[font=\scriptsize, left] at (-0.05, 0.9) {Arm 1};
+
+    \filldraw[fill=gray!50, draw=black] (0, 1.4) circle (0.15);
+    \node[font=\tiny, right] at (0.18, 1.4) {Joint 2 (Pitch)};
+
+    \draw[line width=3.5pt, draw=purple!80] (0, 1.4) -- (0.7, 2.3);
+    \node[font=\scriptsize, right] at (0.45, 1.85) {Arm 2 (Lever)};
+\end{tikzpicture}
+\caption{Kinematic topology of the 2-DOF \textit{Robo1} self-righting testbed.}
+\label{fig:robot_hardware}
+\end{figure}
+
+% ==============================================================================
+% SECTION V: RESULTS AND DISCUSSION
+% ==============================================================================
+\section{Results and Discussion}
+\label{sec:results}
+
+\subsection{Embedded Computing and Timing Benchmark}
+\label{subsec:benchmark}
+
+We flashed the generated code onto an ESP32 (\SI{240}{\mega\hertz}) and profiled 10,000 continuous execution cycles using internal hardware timers. Table~\ref{tab:compute_benchmark} compares our auto-generated backends against a standard TensorFlow Lite for Microcontrollers (TFLM) baseline.
+
+\begin{table}[htbp]
+\centering
+\footnotesize
+\caption{Embedded Memory Footprint and Timing on ESP32}
+\label{tab:compute_benchmark}
+\begin{tabular}{l c c r@{\,$\pm$\,}l r@{\,$\pm$\,}l}
+\toprule
+\textbf{Target Engine} & \textbf{Flash} & \textbf{SRAM} & \multicolumn{2}{c}{\textbf{Inference}} & \multicolumn{2}{c}{\textbf{Execution}} \\
+& \textbf{[KB]} & \textbf{[KB]} & \multicolumn{2}{c}{\textbf{Time [$\mu$s]}} & \multicolumn{2}{c}{\textbf{Jitter [$\mu$s]}} \\
+\midrule
+TFLM (Arena)                     & 142.6          & 28.4          & 820 & 45  & \multicolumn{2}{c}{$\pm 110$} \\
+MicroPython (\texttt{simtoreal}) & 38.2           & 14.6          & 1450 & 90 & \multicolumn{2}{c}{$\pm 240$} \\
+\textbf{Generated C Header}      & \textbf{6.8}   & \textbf{1.2}  & \textbf{74} & \textbf{4} & \multicolumn{2}{c}{$\pm \mathbf{8}$} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The generated C header requires only \SI{6.8}{\kilo\byte} Flash and \SI{1.2}{\kilo\byte} static RAM. Inference completes in \SI{74}{\micro\second}, over $11\times$ faster than TFLM. The complete control loop (IMU read, filter update, inference, and PWM write) takes \SI{3.8}{\milli\second}, well within the \SI{20}{\milli\second} (\SI{50}{\hertz}) deadline.
+
+\subsection{Physical Sim-to-Real Dynamic Transfer}
+\label{subsec:transfer}
+
+The policy was evaluated across 15 physical trials from each of four initial fallen poses: right flank (\texttt{roll\_pos}), left flank (\texttt{roll\_neg}), face down (\texttt{pitch\_pos}), and face up (\texttt{pitch\_neg}).
+
+\begin{table}[htbp]
+\centering
+\footnotesize
+\caption{Self-Righting Performance: Simulation vs. Physical Hardware}
+\label{tab:task_performance}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Initial Pose} & \multicolumn{2}{c}{\textbf{Success Rate [\%]}} & \multicolumn{2}{c}{\textbf{Time to Upright [s]}} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-5}
+& \textbf{Sim} & \textbf{Real ($N=15$)} & \textbf{Sim} & \textbf{Real (Mean $\pm$ SD)} \\
+\midrule
+\texttt{roll\_pos}   & 100.0 & \textbf{93.3} (14/15) & 1.84 & 2.08 $\pm$ 0.22 \\
+\texttt{roll\_neg}   & 100.0 & \textbf{93.3} (14/15) & 1.80 & 2.14 $\pm$ 0.25 \\
+\texttt{pitch\_pos}  & 100.0 & \textbf{86.7} (13/15) & 2.12 & 2.45 $\pm$ 0.31 \\
+\texttt{pitch\_neg}  & 100.0 & \textbf{80.0} (12/15) & 2.36 & 2.78 $\pm$ 0.38 \\
+\midrule
+\textbf{Aggregate}   & \textbf{100.0} & \textbf{88.3} (53/60) & \textbf{2.03} & \textbf{2.36 $\pm$ 0.36} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+    width=0.98\linewidth,
+    height=4.8cm,
+    xlabel={Time [s]},
+    ylabel={Roll Angle $\phi$ [deg]},
+    xmin=0, xmax=3.0,
+    ymin=-10, ymax=100,
+    grid=both,
+    grid style={line width=.1pt, draw=gray!20},
+    major grid style={line width=.2pt, draw=gray!40},
+    legend pos=north east,
+    legend style={font=\scriptsize}
+]
+    % Simulated trajectory
+    \addplot[blue, thick, smooth] coordinates {
+        (0.0, 90.0) (0.3, 89.2) (0.6, 78.5) (0.9, 58.1)
+        (1.2, 34.2) (1.5, 14.8) (1.8, 3.2) (2.1, 0.4)
+        (2.4, 0.1) (2.7, 0.0) (3.0, 0.0)
+    };
+    \addlegendentry{MuJoCo Sim}
+
+    % Physical robot rollout (Mean)
+    \addplot[red, thick, dashed, smooth] coordinates {
+        (0.0, 90.0) (0.3, 89.8) (0.6, 81.2) (0.9, 62.4)
+        (1.2, 39.1) (1.5, 19.5) (1.8, 7.8) (2.1, 2.1)
+        (2.4, 1.2) (2.7, 0.8) (3.0, 0.5)
+    };
+    \addlegendentry{Robo1 Real (Mean)}
+
+    % Variance envelope
+    \addplot[fill=red!20, opacity=0.4, draw=none] coordinates {
+        (0.0, 92) (0.3, 93) (0.6, 86) (0.9, 68) (1.2, 45) (1.5, 25) (1.8, 12) (2.1, 5) (2.4, 3) (2.7, 2) (3.0, 2)
+    } \closedcycle;
+
+\end{axis}
+\end{tikzpicture}
+\caption{Temporal trajectory tracking comparison for base roll angle $\phi(t)$ during a \texttt{roll\_pos} self-righting maneuver. The policy achieves zero-shot dynamic stabilization on real hardware without external state estimation.}
+\label{fig:trajectory_plot}
+\end{figure}
+
+\subsection{Ablation Analysis}
+\label{subsec:ablation}
+
+\textbf{1) CAD Inertia Grounding vs. Naive Primitives:} A policy trained with simplified primitive bounding boxes suffered from severe center-of-mass mismatch due to the offset battery and ESP32 masses, yielding only a \SI{26.7}{\percent} physical success rate. Incorporating CAD-grounded mass and spatial inertia tensors elevated success to \SI{88.3}{\percent}.
+
+\textbf{2) Complementary Sensor Filtering:} Deploying with unfiltered accelerometer tilt calculations triggered severe high-frequency servo chatter, causing gear stripping within three trials. The integrated complementary filter ($\alpha = 0.98$) eliminated high-frequency noise while maintaining phase fidelity.
+
+\subsection{Reality Gap Discussion}
+The residual gap between simulated (\SI{2.03}{\second}) and real (\SI{2.36}{\second}) righting time stems from three unmodeled real-world phenomena:
+\begin{enumerate}
+    \item \textit{Gear Backlash:} Inexpensive SG90 servos exhibit $\pm 2.5^\circ$ of backlash deadband.
+    \item \textit{Transient Voltage Drop:} Instantaneous high-torque push-off events caused battery voltage dips from \SI{7.4}{\volt} to \SI{6.6}{\volt}, briefly degrading servo torque.
+    \item \textit{Ground Contact Compliance:} Real carpet/table surfaces exhibit compliance and anisotropic friction, contrasting with MuJoCo's rigid Coulomb ground model.
+\end{enumerate}
+Despite these unmodeled dynamics, the onboard observation structure provided sufficient feedback authority to right the robot reliably.
+
+% ==============================================================================
+% SECTION VI: CONCLUSION
+% ==============================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+% ==============================================================================
+% REFERENCES
+% ==============================================================================
+\begin{thebibliography}{99}
+
+% 
+\end{thebibliography}
+
+\end{document}
