@@ -4,12 +4,14 @@
   <option timestep="0.001" gravity="0 0 -9.81" integrator="implicitfast"/>
 
   <asset>
-    <mesh name="ESP" file="ESP.stl"/>
     <mesh name="foot" file="foot.stl"/>
     <mesh name="servo1" file="servo1.stl"/>
     <mesh name="arm1" file="arm1.stl"/>
     <mesh name="servo2" file="servo2.stl"/>
     <mesh name="arm2" file="arm2.stl"/>
+    <mesh name="battery" file="battery.stl"/>
+    <mesh name="mpu6050" file="MPU_6050.stl" scale="0.001 0.001 0.001"/>
+    <mesh name="esp32" file="esp32.STL" scale="0.001 0.001 0.001"/>
   </asset>
 
   <default>
@@ -25,53 +27,70 @@
 
     <body name="foot" pos="0 0 0.0">
       <joint type="free"/>
-      <inertial pos="0.079759 -0.079713 0.078911" mass="0.017628"
-                fullinertia="7.818e-6 5.908792e-6 1.1153122e-5 -4.3788e-8 -4.37317e-7 1.1931e-8"/>
+      <inertial pos="0.079759 -0.079713 0.018911" mass="0.017628"
+                fullinertia="7.8188e-6 5.9092e-6 1.1154e-5 -4.351e-8 -4.373e-7 1.226e-8"/>
       <geom type="mesh" mesh="foot" rgba="1 0.45 0.45 1"/>
-      <geom name="foot_collision" type="box" pos="0.00829 0.00365 -0.00155"
-            size="0.02131 0.03100 0.03748" contype="0" conaffinity="0" rgba="1 0.45 0.45 0"/>
+      <geom name="foot_collision" type="box" pos="0.07810 -0.07900 0.09260"
+            size="0.03000 0.03645 0.01840" contype="0" conaffinity="0" rgba="1 0.45 0.45 0"/>
 
-      <body name="ATOM" pos="0 0 0">
+      <body name="esp32" pos="0 0 0">
+        <inertial pos="0.07845 -0.07774 0.01147" mass="0.010"
+                fullinertia="7.805e-7 2.655e-6 1.887e-6 8.05e-9 1.38e-10 -3.08e-10"/>
+        <geom type="mesh" mesh="esp32" pos="0.0526 -0.0825 0.01147" rgba="0.2 0.2 0.2 1"/>
+        <geom name="esp32_collision" type="box" pos="0.07810 -0.07900 0.11145"
+              size="0.02550 0.00350 0.01405" contype="0" conaffinity="0" rgba="0.2 0.2 0.2 0"/>
+      </body>
+
+      <body name="battery" pos="0 0 0">
         <inertial pos="0.07810 -0.10035 0.084206" mass="0.007"
-                  diaginertia="4.34538e-7 4.34538e-7 6.40468e-7"/>
-        <geom type="mesh" mesh="ESP" rgba="1 1 1 1"/>
-        <geom name="atom_collision" type="box" pos="0 0 0"
-              size="0.00700 0.01180 0.01180" contype="0" conaffinity="0" rgba="1 1 1 0"/>
+                  diaginertia="4.3446e-7 4.3454e-7 6.4039e-7"/>
+        <geom type="mesh" mesh="battery" rgba="0.2 0.8 0.2 1"/>
+        <geom name="battery_collision" type="box" pos="0.07810 -0.10035 0.084206"
+              size="0.01180 0.01180 0.00700" contype="0" conaffinity="0" rgba="0.2 0.8 0.2 0"/>
+      </body>
+
+      <body name="mpu6050" pos="0 0 0">
+        <inertial pos="0.07810 -0.10035 0.0935" mass="0.0021"
+                  fullinertia="3.981e-8 6.683e-8 1.051e-7 -1.58e-10 6.76e-11 -3.21e-10"/>
+        <geom type="mesh" mesh="mpu6050" pos="0.07810 -0.10035 0.0935" rgba="0.1 0.3 0.8 1"/>
+        <geom name="mpu6050_collision" type="box" pos="0.07810 -0.10035 0.0935"
+              size="0.01025 0.00800 0.00150" contype="0" conaffinity="0" rgba="0.1 0.3 0.8 0"/>
+        <site name="imu_site" pos="0.07810 -0.10035 0.0935"/>
       </body>
 
       <body name="servo1" pos="0 0 0">
-        <inertial pos="0.081005 -0.079 0.094111" mass="0.011"
-                  fullinertia="6.54478e-7 1.01173e-6 6.17122e-7 -2.36801e-16 1.78456e-8 8.39085e-17"/>
+        <inertial pos="0.081007 -0.079001 0.094111" mass="0.009"
+                  fullinertia="5.3512e-7 8.2748e-7 5.0436e-7 -1.684e-10 1.471e-8 -1.436e-10"/>
         <geom type="mesh" mesh="servo1" rgba="0.5 0.5 0.5 1"/>
-        <geom name="servo1_collision" type="box" pos="0 -0.00028 0.00036"
-              size="0.00600 0.01570 0.01670" contype="0" conaffinity="0" rgba="0.5 0.5 0.5 0"/>  
+        <geom name="servo1_collision" type="box" pos="0.07650 -0.07900 0.09400"
+              size="0.01580 0.00600 0.01200" contype="0" conaffinity="0" rgba="0.5 0.5 0.5 0"/>  
       </body>
-
 
       <body name="arm1" pos="0 0 0">
         <joint name="servo1_joint" axis="1 0 0" pos="0.06070 -0.079 0.099606"
                damping="0.02" armature="0.0001"/>
-        <inertial pos="0.077944 -0.07521 0.12069" mass="0.011444" 
-                fullinertia="2.729019e-6 4.042083e-6 2.347159e-6 -1.3415e-8 -7.1469e-8 -5.00723e-7"/>
+        <inertial pos="0.077945 -0.075210 0.120692" mass="0.011444" 
+                  fullinertia="2.7284e-6 4.0417e-6 2.3471e-6 -1.319e-8 -7.149e-8 -5.002e-7"/>
         <geom type="mesh" mesh="arm1" rgba="1 0.45 0.45 1"/>
-        <geom name="arm1_collision" type="box" pos="0.00053 0.00003 0.00274"
-              size="0.01366 0.02253 0.03257" contype="0" conaffinity="0" rgba="1 0.45 0.45 0"/>
+        <geom name="arm1_collision" type="box" pos="0.07810 -0.07090 0.12470"
+              size="0.02240 0.01433 0.03132" contype="0" conaffinity="0" rgba="1 0.45 0.45 0"/>
 
         <body name="servo2" pos="0 0 0">
-          <inertial pos="0.07810 -0.076095 0.139111" mass="0.011" 
-                fullinertia="1.01173e-6 6.54478e-7 6.17122e-7 2.36801e-16 -8.39085e-17 1.78456e-8"/>
+          <inertial pos="0.078101 -0.076094 0.139111" mass="0.009" 
+                    fullinertia="8.2722e-7 5.3469e-7 5.0437e-7 -1.486e-10 3.269e-10 1.434e-8"/>
           <geom type="mesh" mesh="servo2" rgba="0.5 0.5 0.5 1"/>
-          <geom name="servo2_collision" type="box" pos="0 0.00028 0.00036"
-                size="0.00600 0.01570 0.01670" contype="0" conaffinity="0" rgba="0.5 0.5 0.5 0"/>  
+          <geom name="servo2_collision" type="box" pos="0.07810 -0.08060 0.13900"
+                size="0.00600 0.01580 0.01200" contype="0" conaffinity="0" rgba="0.5 0.5 0.5 0"/>  
 
           <body name="arm2" pos="0 0 0">
             <joint name="servo2_joint" axis="0 1 0" pos="0.07810 -0.09640 0.144606"
                    damping="0.02" armature="0.0001"/>
-            <inertial pos="0.07810 -0.079112 0.189317" mass="0.021622" 
-                    fullinertia="1.9417087e-5 1.7670681e-5 2.307976e-6 0 3.2e-11 -1.07968e-7"/>
+            <inertial pos="0.078100 -0.079111 0.189321" mass="0.021622" 
+                      fullinertia="1.9412e-5 1.7667e-5 2.3071e-6 -1.958e-10 2.410e-10 -1.079e-7"/>
             <geom type="mesh" mesh="arm2" rgba="1 0.45 0.45 1"/>
-            <geom name="arm2_collision" type="box" pos="0 -0.00040 0.00975"
-                  size="0.00625 0.02250 0.05202" contype="0" conaffinity="0" rgba="1 0.45 0.45 0"/>
+            <geom name="arm2_collision" type="box" pos="0.07810 -0.07900 0.19030"
+                  size="0.00625 0.02240 0.05192" contype="0" conaffinity="0" rgba="1 0.45 0.45 0"/>
+
           </body>
 
         </body>
@@ -89,4 +108,9 @@
     <position name="servo1_pos" joint="servo1_joint"/>
     <position name="servo2_pos" joint="servo2_joint"/>
   </actuator>
+
+  <sensor>
+    <accelerometer name="imu_accel" site="imu_site"/>
+    <gyro name="imu_gyro" site="imu_site"/>
+  </sensor>
 </mujoco>
