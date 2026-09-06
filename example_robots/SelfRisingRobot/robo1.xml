@@ -27,25 +27,25 @@
 
     <body name="foot" pos="0 0 0.0">
       <joint type="free"/>
-      <inertial pos="0.079759 -0.079713 0.018911" mass="0.017628"
+      <inertial pos="0.079759 -0.079713 0.078911" mass="0.017628"
                 fullinertia="7.8188e-6 5.9092e-6 1.1154e-5 -4.351e-8 -4.373e-7 1.226e-8"/>
       <geom type="mesh" mesh="foot" rgba="1 0.45 0.45 1"/>
       <geom name="foot_collision" type="box" pos="0.07810 -0.07900 0.09260"
             size="0.03000 0.03645 0.01840" contype="0" conaffinity="0" rgba="1 0.45 0.45 0"/>
 
-      <body name="esp32" pos="0 0 0">
-        <inertial pos="0.07845 -0.07774 0.01147" mass="0.010"
-                fullinertia="7.805e-7 2.655e-6 1.887e-6 8.05e-9 1.38e-10 -3.08e-10"/>
-        <geom type="mesh" mesh="esp32" pos="0.0526 -0.0825 0.01147" rgba="0.2 0.2 0.2 1"/>
-        <geom name="esp32_collision" type="box" pos="0.07810 -0.07900 0.11145"
-              size="0.02550 0.00350 0.01405" contype="0" conaffinity="0" rgba="0.2 0.2 0.2 0"/>
+      <body name="battery1" pos="0 0 0">
+        <inertial pos="0.06610 -0.10035 0.084206" mass="0.007"
+                  diaginertia="4.345e-7 4.345e-7 6.404e-7"/>
+        <geom type="mesh" mesh="battery" pos="-0.012 0 0" rgba="0.2 0.8 0.2 1"/>
+        <geom name="battery1_collision" type="box" pos="0.06610 -0.10035 0.084206"
+              size="0.01180 0.01180 0.00700" contype="0" conaffinity="0" rgba="0.2 0.8 0.2 0"/>
       </body>
 
-      <body name="battery" pos="0 0 0">
-        <inertial pos="0.07810 -0.10035 0.084206" mass="0.007"
-                  diaginertia="4.3446e-7 4.3454e-7 6.4039e-7"/>
-        <geom type="mesh" mesh="battery" rgba="0.2 0.8 0.2 1"/>
-        <geom name="battery_collision" type="box" pos="0.07810 -0.10035 0.084206"
+      <body name="battery2" pos="0 0 0">
+        <inertial pos="0.09010 -0.10035 0.084206" mass="0.007"
+                  diaginertia="4.345e-7 4.345e-7 6.404e-7"/>
+        <geom type="mesh" mesh="battery" pos="0.012 0 0" rgba="0.2 0.8 0.2 1"/>
+        <geom name="battery2_collision" type="box" pos="0.09010 -0.10035 0.084206"
               size="0.01180 0.01180 0.00700" contype="0" conaffinity="0" rgba="0.2 0.8 0.2 0"/>
       </body>
 
@@ -56,6 +56,14 @@
         <geom name="mpu6050_collision" type="box" pos="0.07810 -0.10035 0.0935"
               size="0.01025 0.00800 0.00150" contype="0" conaffinity="0" rgba="0.1 0.3 0.8 0"/>
         <site name="imu_site" pos="0.07810 -0.10035 0.0935"/>
+      </body>
+
+      <body name="esp32" pos="0 0 0">
+        <inertial pos="0.07845 -0.05771 0.08476" mass="0.010"
+                  fullinertia="7.834e-7 1.888e-6 2.657e-6 1.381e-10 8.117e-9 1.558e-9"/>
+        <geom type="mesh" mesh="esp32" pos="0.05260 0.20375 0.08000" euler="1.5707963 0 0" rgba="0.2 0.2 0.2 1"/>
+        <geom name="esp32_collision" type="box" pos="0.07810 -0.05770 0.08350"
+              size="0.02550 0.01405 0.00350" contype="0" conaffinity="0" rgba="0.2 0.2 0.2 0"/>
       </body>
 
       <body name="servo1" pos="0 0 0">
@@ -90,7 +98,6 @@
             <geom type="mesh" mesh="arm2" rgba="1 0.45 0.45 1"/>
             <geom name="arm2_collision" type="box" pos="0.07810 -0.07900 0.19030"
                   size="0.00625 0.02240 0.05192" contype="0" conaffinity="0" rgba="1 0.45 0.45 0"/>
-
           </body>
 
         </body>
