@@ -40,24 +40,108 @@ def make_env(xml_path: str, randomize: bool = False, rank: int = 0, seed: int = 
     return _init
 
 
-def pretrain_policy_from_scripted(model: PPO, xml_path: str, epochs: int = 2000) -> PPO:
+def pretrain_policy_from_scripted(model: PPO, xml_path: str, epochs: int = 1500) -> PPO:
     """Jumpstart the policy network using behavioral cloning from reference trajectories."""
     from getup_reference import getup_sequence_for_pose
-    from robo1_env import FALLEN_POSES, roll_pitch_to_quat
+    from robo1_env import FALLEN_POSES
 
-    print(f"\n[Pretraining] Collecting expert demonstration data across 4 fallen poses...")
+    print(f"\n[Pretraining] Collecting expert demonstration data across 4 fallen poses + holding...")
     observations = []
     actions = []
 
+    # 1. Collect get-up trajectories with diverse initial offsets
+    offsets = [(0.0, 0.0), (5.0, -3.0), (-5.0, 4.0)]
     for pose in ("roll_pos", "roll_neg", "pitch_pos", "pitch_neg"):
-        env = Robo1GetupEnv(xml_path=xml_path, fallen_poses=(pose,))
-        obs, _ = env.reset(options={"pose": pose})
-        sequence = getup_sequence_for_pose(pose)
+        for offset in offsets:
+            env = Robo1GetupEnv(xml_path=xml_path, fallen_poses=(pose,))
+            obs, _ = env.reset(options={"pose": pose, "offset": offset})
+            sequence = getup_sequence_for_pose(pose)
 
-        # Build trajectory schedule
+            # Build trajectory schedule
+            targets = []
+            prev = np.zeros(2, dtype=np.float64)
+            for waypoint in sequence:
+                for i in range(350):
+                    t = (i + 1) / 350.0
+                    ctrl = (1.0 - t) * prev + t * waypoint
+                    if i % env.frame_skip == env.frame_skip - 1:
+                        targets.append(ctrl.copy())
+                prev = waypoint
+
+            # Crucial: hold upright posture at [0, 0] for 80 steps
+            for _ in range(80):
+                targets.append(np.array([0.0, 0.0]))
+
+            for waypoint in targets:
+                error = waypoint - env.target
+                action = np.clip(error / env.target_delta, -1.0, 1.0).astype(np.float32)
+                observations.append(obs.copy())
+                actions.append(action.copy())
+                obs, _, terminated, truncated, _ = env.step(action)
+                if terminated or truncated:
+                    break
+            env.close()
+
+    # 2. Collect standing-still stability demonstrations (upright pose, actions = [0, 0])
+    env = Robo1GetupEnv(xml_path=xml_path)
+    for _ in range(3):
+        env.data.qpos[:] = 0.0
+        env.data.qvel[:] = 0.0
+        env.data.qpos[0:3] = [0.0, 0.0, 0.08]
+        env.data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
+        env.target[:] = 0.0
+        env.data.ctrl[:] = 0.0
+        import mujoco
+        mujoco.mj_forward(env.model, env.data)
+        for _ in range(100):
+            mujoco.mj_step(env.model, env.data)
+        for _ in range(60):
+            obs = env._get_obs()
+            action = np.zeros(2, dtype=np.float32)
+            observations.append(obs.copy())
+            actions.append(action.copy())
+            env.step(action)
+    env.close()
+
+    # 3. Dynamic Push Knockdown Demonstrations across all compass directions:
+    # Teaches the network to sense arbitrary dynamic falls and execute the recovery motion
+    push_recovery_directions = [
+        ((2.0, 0.0, 0.0), "pitch_pos"),     # Forward push -> recovery
+        ((-2.0, 0.0, 0.0), "roll_neg"),     # Backward push -> recovery
+        ((0.0, 2.0, 0.0), "roll_neg"),      # Left push -> recovery
+        ((0.0, -2.0, 0.0), "pitch_pos"),    # Right push -> recovery
+        ((1.4, 1.4, 0.0), "roll_neg"),      # Forward-left push
+        ((1.4, -1.4, 0.0), "roll_neg"),     # Forward-right push
+        ((-1.4, 1.4, 0.0), "roll_pos"),     # Backward-left push
+        ((-1.4, -1.4, 0.0), "pitch_pos"),   # Backward-right push
+    ]
+
+    for push_vec, rec_seq_name in push_recovery_directions:
+        env = Robo1GetupEnv(xml_path=xml_path)
+        env.data.qpos[:] = 0.0
+        env.data.qvel[:] = 0.0
+        env.data.qpos[0:3] = [0.0, 0.0, 0.08]
+        env.data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
+        env.target[:] = 0.0
+        env.data.ctrl[:] = 0.0
+        mujoco.mj_forward(env.model, env.data)
+        for _ in range(100):
+            mujoco.mj_step(env.model, env.data)
+        for _ in range(15):
+            env.step([0.0, 0.0])
+
+        env.apply_external_force(push_vec, duration_env_steps=3, body_name="arm2")
+        for _ in range(15):
+            obs = env._get_obs()
+            action = np.zeros(2, dtype=np.float32)
+            observations.append(obs.copy())
+            actions.append(action.copy())
+            env.step(action)
+
+        seq = getup_sequence_for_pose(rec_seq_name)
         targets = []
-        prev = np.zeros(2, dtype=np.float64)
-        for waypoint in sequence:
+        prev = env.target.copy()
+        for waypoint in seq:
             for i in range(350):
                 t = (i + 1) / 350.0
                 ctrl = (1.0 - t) * prev + t * waypoint
@@ -65,13 +149,16 @@ def pretrain_policy_from_scripted(model: PPO, xml_path: str, epochs: int = 2000)
                     targets.append(ctrl.copy())
             prev = waypoint
 
-        for waypoint in targets:
-            error = waypoint - env.target
-            action = np.clip(error / env.target_delta, -1.0, 1.0).astype(np.float32)
+        for _ in range(80):
+            targets.append(np.array([0.0, 0.0]))
+
+        for wp in targets:
+            err = wp - env.target
+            action = np.clip(err / env.target_delta, -1.0, 1.0).astype(np.float32)
             observations.append(obs.copy())
             actions.append(action.copy())
-            obs, _, terminated, truncated, _ = env.step(action)
-            if terminated or truncated:
+            obs, _, term, trunc, info = env.step(action)
+            if term or trunc:
                 break
         env.close()
 
@@ -89,10 +176,10 @@ def pretrain_policy_from_scripted(model: PPO, xml_path: str, epochs: int = 2000)
         loss.backward()
         optimizer.step()
 
-        if (epoch + 1) % 500 == 0 or epoch == epochs - 1:
+        if (epoch + 1) % 300 == 0 or epoch == epochs - 1:
             print(f"  Epoch {epoch+1:4d}/{epochs} | MSE Loss: {loss.item():.6f}")
 
-    print("[Pretraining] Complete! Transitioning to PPO RL exploration.\n")
+    print("[Pretraining] Complete!\n")
     return model
 
 
@@ -150,6 +237,11 @@ def main():
         "--pretrain",
         action="store_true",
         help="Run behavioral cloning pretraining before PPO",
+    )
+    parser.add_argument(
+        "--pretrain-only",
+        action="store_true",
+        help="Run behavioral cloning pretraining and save model immediately (no PPO)",
     )
     parser.add_argument(
         "--randomize",
@@ -247,16 +339,19 @@ def main():
             net_arch=dict(pi=[64, 64], vf=[64, 64]),
             activation_fn=torch.nn.Tanh,
         )
+        # When pretraining, use lower entropy coeff and stable LR to avoid erasing demonstrations
+        ent_coef = 0.001 if (args.pretrain or args.pretrain_only) else 0.005
+        lr = min(args.lr, 1e-4) if args.pretrain else args.lr
         model = PPO(
             "MlpPolicy",
             vec_env,
-            learning_rate=args.lr,
+            learning_rate=lr,
             n_steps=args.n_steps,
             batch_size=args.batch_size,
             gamma=args.gamma,
             gae_lambda=0.95,
             clip_range=0.2,
-            ent_coef=0.005,
+            ent_coef=ent_coef,
             policy_kwargs=policy_kwargs,
             verbose=1,
             seed=args.seed,
@@ -265,8 +360,19 @@ def main():
         )
 
     # Optional behavioral cloning pretraining
-    if args.pretrain and not args.model_in:
+    if (args.pretrain or args.pretrain_only) and not args.model_in:
         model = pretrain_policy_from_scripted(model, xml_path=xml_path, epochs=1500)
+
+    # If user only wanted behavioral cloning, save and exit directly
+    if args.pretrain_only:
+        model.save(str(out_path))
+        best_dir = out_path.parent / "best_model"
+        best_dir.mkdir(parents=True, exist_ok=True)
+        model.save(str(best_dir / "best_model.zip"))
+        print(f"[Pretraining] Model saved directly to: {out_path} and {best_dir / 'best_model.zip'}")
+        vec_env.close()
+        eval_env.close()
+        return
 
     has_progress_bar = False
     try:

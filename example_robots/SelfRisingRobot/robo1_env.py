@@ -109,6 +109,14 @@ class Robo1GetupEnv(gym.Env):
             mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "servo2_joint")
         ]
 
+        self.arm2_body_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_BODY, "arm2"
+        )
+        self.applied_force = np.zeros(3, dtype=np.float64)
+        self.applied_force_steps = 0
+        self.applied_force_body_id = self.arm2_body_id
+        self.interactive_push_magnitude = 2.0  # Newtons
+
         self.standing_height = self._compute_standing_height()
 
         # Action space: normalized deltas in [-1, 1] for [servo1, servo2]
@@ -173,9 +181,25 @@ class Robo1GetupEnv(gym.Env):
         self.target[:] = 0.0
         self.data.ctrl[:] = self.target
 
+    def _compute_orientation_tilt(self) -> Tuple[float, float]:
+        """Compute continuous, yaw-invariant roll and pitch tilt angles matching MPU6050.
+        
+        Uses the projection of world upward vertical (opposite of gravity) onto the
+        robot base's body frame axes. This eliminates Euler angle gimbal-lock flips
+        and accurately models the microcontroller's accelerometer/complementary filter.
+        """
+        xmat = self.data.xmat[self.foot_body_id].reshape(3, 3)
+        ax, ay, az = float(xmat[0, 2]), float(xmat[1, 2]), float(xmat[2, 2])
+        # Aligned convention:
+        # roll: tilt about body X axis (positive tilts right)
+        roll = math.atan2(-ay, math.sqrt(ax * ax + az * az))
+        # pitch: tilt about body Y axis (positive tilts forward)
+        pitch = math.atan2(ax, math.sqrt(ay * ay + az * az))
+        return roll, pitch
+
     def _get_obs(self) -> np.ndarray:
         """Compute the 4D observation vector [roll, pitch, target1, target2]."""
-        roll, pitch = quat_to_roll_pitch(self.data.qpos[3:7])
+        roll, pitch = self._compute_orientation_tilt()
         return np.array(
             [
                 roll,
@@ -185,6 +209,26 @@ class Robo1GetupEnv(gym.Env):
             ],
             dtype=np.float32,
         )
+
+    def apply_external_force(
+        self,
+        force_xyz: Tuple[float, float, float] | np.ndarray,
+        duration_env_steps: int = 1,
+        body_name: str = "arm2",
+    ):
+        """Apply external 3D perturbation force (Newtons) to a robot body.
+        
+        Args:
+            force_xyz: Force vector [Fx, Fy, Fz] in Newtons (world frame).
+            duration_env_steps: Number of environment steps (at 50 Hz) to apply the force.
+            body_name: Name of target body ('arm2' for head/top body, 'foot' for base).
+        """
+        body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+        if body_id < 0:
+            body_id = self.arm2_body_id
+        self.applied_force_body_id = body_id
+        self.applied_force = np.asarray(force_xyz, dtype=np.float64)
+        self.applied_force_steps = max(1, duration_env_steps)
 
     def _upright(self) -> float:
         """Measure uprightness from Z component of base orientation matrix."""
@@ -221,6 +265,9 @@ class Robo1GetupEnv(gym.Env):
         super().reset(seed=seed)
         self.step_count = 0
         self.success_count = 0
+        self.applied_force_steps = 0
+        self.applied_force[:] = 0.0
+        self.data.xfrc_applied[:] = 0.0
 
         pose_name = None
         offset_deg = (0.0, 0.0)
@@ -254,8 +301,18 @@ class Robo1GetupEnv(gym.Env):
         self.target = np.clip(self.target, -self.target_limit, self.target_limit)
 
         for _ in range(self.frame_skip):
+            if self.applied_force_steps > 0:
+                self.data.xfrc_applied[self.applied_force_body_id, :3] = self.applied_force
+            else:
+                self.data.xfrc_applied[self.applied_force_body_id, :3] = 0.0
+
             self.data.ctrl[:] = self.target
             mujoco.mj_step(self.model, self.data)
+
+        if self.applied_force_steps > 0:
+            self.applied_force_steps -= 1
+            if self.applied_force_steps == 0:
+                self.data.xfrc_applied[self.applied_force_body_id, :3] = 0.0
 
         self.step_count += 1
         obs = self._get_obs()
@@ -269,18 +326,19 @@ class Robo1GetupEnv(gym.Env):
         foot_height_error = self._foot_height() - self.standing_height
 
         # Reward formulation
-        tilt_cost = 0.2 * (roll * roll + pitch * pitch)
+        # stand_gate smoothly transitions from 0 (fallen) to 1 (standing upright)
         stand_gate = float(np.clip((upright - 0.65) / 0.35, 0.0, 1.0))
+        tilt_cost = 0.2 * (roll * roll + pitch * pitch)
         servo_zero_cost = stand_gate * 0.5 * float(np.sum(servo_angles * servo_angles))
         target_zero_cost = stand_gate * 0.2 * float(np.sum(self.target * self.target))
         height_cost = stand_gate * 5.0 * (foot_height_error * foot_height_error)
-        body_vel_cost = 0.01 * float(np.sum(self.data.qvel[0:6] ** 2))
-        servo_vel_cost = 0.005 * float(np.sum(servo_velocities ** 2))
-        action_cost = 0.005 * float(np.sum(action ** 2))
-        servo_motion_cost = 0.02 * float(np.sum((self.target - old_target) ** 2))
+        body_vel_cost = stand_gate * 0.01 * float(np.sum(self.data.qvel[0:6] ** 2))
+        servo_vel_cost = stand_gate * 0.005 * float(np.sum(servo_velocities ** 2))
+        action_cost = 0.001 * float(np.sum(action ** 2))
+        servo_motion_cost = stand_gate * 0.02 * float(np.sum((self.target - old_target) ** 2))
 
         reward = (
-            2.0 * upright
+            3.0 * upright
             + 8.0 * upright_progress
             - tilt_cost
             - servo_zero_cost
@@ -293,21 +351,20 @@ class Robo1GetupEnv(gym.Env):
         )
 
         goal_pose = (
-            upright > 0.95
-            and abs(roll) < 0.25
-            and abs(pitch) < 0.25
-            and np.max(np.abs(servo_angles)) < 0.12
-            and abs(foot_height_error) < 0.02
-            and np.linalg.norm(self.data.qvel[0:6]) < 0.25
+            upright > 0.92
+            and abs(roll) < 0.35
+            and abs(pitch) < 0.35
+            and np.max(np.abs(servo_angles)) < 0.25
+            and abs(foot_height_error) < 0.04
         )
 
         if goal_pose:
             self.success_count += 1
-            reward += 5.0
+            reward += 3.0
         else:
             self.success_count = 0
 
-        terminated = self.success_count >= 50
+        terminated = self.success_count >= 40
         truncated = self.step_count >= self.max_steps
 
         info = {
@@ -325,11 +382,65 @@ class Robo1GetupEnv(gym.Env):
 
         return obs, reward, terminated, truncated, info
 
+    def _print_push_help(self):
+        print("\n" + "=" * 60)
+        print("  MuJoCo Viewer Interactive Force Perturbation Controls:")
+        print("    [F] / [Up Arrow]    : Push Forward (+X)")
+        print("    [B] / [Down Arrow]  : Push Backward (-X)")
+        print("    [L] / [Left Arrow]  : Push Left (+Y)")
+        print("    [R] / [Right Arrow] : Push Right (-Y)")
+        print("    [Space] / [K]       : Hard Knockdown (topple the robot)")
+        print("    [P]                 : Random Direction Push")
+        print(f"    [+] / [-]           : Adjust Force (Current: {self.interactive_push_magnitude:.1f} N)")
+        print("    [H]                 : Show this help menu")
+        print("    [Mouse Drag]        : Right-click & drag on robot in viewer")
+        print("=" * 60 + "\n")
+
+    def _on_key(self, keycode: int):
+        """Handle keyboard push perturbations inside the MuJoCo viewer window."""
+        mag = self.interactive_push_magnitude
+        if keycode in (ord('f'), ord('F'), 265):
+            self.apply_external_force([mag, 0.0, 0.0], duration_env_steps=2)
+            print(f"\n>>> [Force Perturbation] Pushed FORWARD (+X) with {mag:.1f} N!")
+        elif keycode in (ord('b'), ord('B'), 264):
+            self.apply_external_force([-mag, 0.0, 0.0], duration_env_steps=2)
+            print(f"\n>>> [Force Perturbation] Pushed BACKWARD (-X) with {mag:.1f} N!")
+        elif keycode in (ord('l'), ord('L'), 263):
+            self.apply_external_force([0.0, mag, 0.0], duration_env_steps=2)
+            print(f"\n>>> [Force Perturbation] Pushed LEFT (+Y) with {mag:.1f} N!")
+        elif keycode in (ord('r'), ord('R'), 262):
+            self.apply_external_force([0.0, -mag, 0.0], duration_env_steps=2)
+            print(f"\n>>> [Force Perturbation] Pushed RIGHT (-Y) with {mag:.1f} N!")
+        elif keycode in (ord('k'), ord('K'), 32):
+            knock_force = max(2.5, mag * 1.5)
+            theta = np.random.uniform(0, 2 * math.pi)
+            fx = knock_force * math.cos(theta)
+            fy = knock_force * math.sin(theta)
+            self.apply_external_force([fx, fy, 0.0], duration_env_steps=3)
+            print(f"\n>>> [Force Perturbation] HARD KNOCKDOWN ({knock_force:.1f} N) applied to topple robot!")
+        elif keycode in (ord('p'), ord('P')):
+            theta = np.random.uniform(0, 2 * math.pi)
+            fx = mag * math.cos(theta)
+            fy = mag * math.sin(theta)
+            self.apply_external_force([fx, fy, 0.0], duration_env_steps=2)
+            print(f"\n>>> [Force Perturbation] Random push ({mag:.1f} N) applied!")
+        elif keycode in (ord('+'), ord('=')):
+            self.interactive_push_magnitude = min(10.0, self.interactive_push_magnitude + 0.5)
+            print(f"\n>>> [Config] Push force increased to: {self.interactive_push_magnitude:.1f} N")
+        elif keycode in (ord('-'), ord('_')):
+            self.interactive_push_magnitude = max(0.5, self.interactive_push_magnitude - 0.5)
+            print(f"\n>>> [Config] Push force decreased to: {self.interactive_push_magnitude:.1f} N")
+        elif keycode in (ord('h'), ord('H')):
+            self._print_push_help()
+
     def render(self):
         if self.render_mode == "human":
             if self._viewer is None:
                 import mujoco.viewer
-                self._viewer = mujoco.viewer.launch_passive(self.model, self.data)
+                self._viewer = mujoco.viewer.launch_passive(
+                    self.model, self.data, key_callback=self._on_key
+                )
+                self._print_push_help()
             self._viewer.sync()
         elif self.render_mode == "rgb_array":
             renderer = mujoco.Renderer(self.model, 480, 640)
