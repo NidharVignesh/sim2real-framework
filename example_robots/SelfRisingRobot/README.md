@@ -113,25 +113,25 @@ python -c "import mujoco; m = mujoco.MjModel.from_xml_path('robo1.xml'); print(f
 
 ### 2. Training with PPO
 
-#### A. Standard Training from Scratch
-Train an agent across 4 parallel environments for 200,000 steps:
+#### A. Standard Training with Sim-to-Real Domain Randomization
+Train an agent across 4 parallel environments for 200,000 steps with mass, damping, actuator strength, and sensor noise randomization:
 
 ```bash
-python train.py --timesteps 200000 --n-envs 4
+python train.py --timesteps 200000 --n-envs 4 --domain-rand
 ```
 
 #### B. Jumpstart with Behavioral Cloning Pretraining (Recommended)
 Pre-trains the neural network weights on reference geometric righting trajectories before running PPO reinforcement learning. This accelerates convergence significantly:
 
 ```bash
-python train.py --pretrain --pretrain-epochs 2000 --timesteps 200000 --n-envs 4
+python train.py --pretrain --pretrain-epochs 1500 --timesteps 200000 --n-envs 4 --domain-rand
 ```
 
 #### C. Resuming / Fine-Tuning an Existing Model
 Load an existing `.zip` model checkpoint and continue training for additional steps:
 
 ```bash
-python train.py --model-in robo1_getup_ppo.zip --timesteps 100000 --n-envs 4
+python train.py --model-in robo1_getup_ppo.zip --timesteps 100000 --n-envs 4 --domain-rand
 ```
 
 #### Available Training CLI Arguments:
@@ -140,10 +140,19 @@ python train.py --model-in robo1_getup_ppo.zip --timesteps 100000 --n-envs 4
 | `--timesteps` | `200000` | Total environment steps to train |
 | `--n-envs` | `4` | Number of parallel worker environments (`SubprocVecEnv`) |
 | `--lr` | `3e-4` | Learning rate for Adam optimizer |
-| `--batch-size` | `64` | Minibatch size for PPO surrogate updates |
+| `--batch-size` | `256` | Minibatch size for PPO surrogate updates |
+| `--domain-rand` | `False` | Enable Sim-to-Real Domain Randomization (mass, damping, friction, motor strength, sensor noise) |
+| `--sensor-noise` | `0.015` | MPU-6050 sensor noise standard deviation in radians (~0.85°) |
+| `--rand-pushes` | `False` | Apply occasional disturbance push forces during training |
+| `--export-onnx` | `True` | Export policy to ONNX format with numerical verification (`robo1_policy.onnx`) |
+| `--export-c` | `True` | Export policy to embedded C header (`policy_network.h`) for ESP32 |
+| `--export-mpy` | `False` | Export policy to MicroPython (`policy_network.py`) |
+| `--eval-after-train` | `True` | Run multi-pose quantitative validation benchmark post-training |
+| `--headless` | `False` | Force headless rendering backend (`MUJOCO_GL=egl` or `osmesa`) |
 | `--model-in` | `None` | Path to existing `.zip` model to resume training from |
 | `--model-out` | `robo1_getup_ppo.zip` | File path to save the final trained model |
 | `--pretrain` | `False` | Run behavioral cloning pretraining before RL |
+| `--pretrain-epochs` | `1500` | Supervised pretraining epochs |
 | `--eval-freq` | `10000` | Frequency (in steps) to evaluate policy and save best model |
 
 ---

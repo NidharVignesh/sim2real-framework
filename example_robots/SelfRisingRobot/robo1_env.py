@@ -68,10 +68,24 @@ class Robo1GetupEnv(gym.Env):
         fallen_poses: Optional[Tuple[str, ...]] = None,
         render_mode: Optional[str] = None,
         randomize_pose_offset: bool = False,
+        domain_randomization: bool = False,
+        rand_mass_range: Tuple[float, float] = (0.85, 1.15),
+        rand_damping_range: Tuple[float, float] = (0.80, 1.20),
+        rand_friction_range: Tuple[float, float] = (0.80, 1.20),
+        rand_actuator_range: Tuple[float, float] = (0.85, 1.15),
+        sensor_noise_std: float = 0.015,
+        random_pushes: bool = False,
     ):
         super().__init__()
         self.render_mode = render_mode
         self.randomize_pose_offset = randomize_pose_offset
+        self.domain_randomization = domain_randomization
+        self.rand_mass_range = rand_mass_range
+        self.rand_damping_range = rand_damping_range
+        self.rand_friction_range = rand_friction_range
+        self.rand_actuator_range = rand_actuator_range
+        self.sensor_noise_std = sensor_noise_std
+        self.random_pushes = random_pushes
 
         # Resolve XML path relative to this file if not specified
         if xml_path is None:
@@ -137,6 +151,14 @@ class Robo1GetupEnv(gym.Env):
         self.prev_upright = 0.0
         self._viewer = None
 
+        # Store nominal physics parameters for domain randomization (sim-to-real)
+        self.nominal_body_mass = self.model.body_mass.copy()
+        self.nominal_body_inertia = self.model.body_inertia.copy()
+        self.nominal_dof_damping = self.model.dof_damping.copy()
+        self.nominal_dof_frictionloss = self.model.dof_frictionloss.copy()
+        self.nominal_geom_friction = self.model.geom_friction.copy()
+        self.actuator_strength_scale = 1.0
+
     def _compute_standing_height(self) -> float:
         """Measure the resting foot height when the robot is standing upright."""
         data = mujoco.MjData(self.model)
@@ -200,6 +222,12 @@ class Robo1GetupEnv(gym.Env):
     def _get_obs(self) -> np.ndarray:
         """Compute the 4D observation vector [roll, pitch, target1, target2]."""
         roll, pitch = self._compute_orientation_tilt()
+        if self.domain_randomization and self.sensor_noise_std > 0.0:
+            # Sim-to-Real: Add Gaussian noise matching physical MPU-6050 noise & complementary filter drift
+            noise = self.np_random.normal(0.0, self.sensor_noise_std, size=2)
+            roll = float(np.clip(roll + noise[0], -math.pi, math.pi))
+            pitch = float(np.clip(pitch + noise[1], -math.pi, math.pi))
+
         return np.array(
             [
                 roll,
@@ -278,7 +306,46 @@ class Robo1GetupEnv(gym.Env):
         if pose_name is None:
             pose_name = self.np_random.choice(self.fallen_poses)
 
-        if self.randomize_pose_offset and options is None:
+        # Sim-to-Real Domain Randomization (Meta-Quantum / Kevin Wood RL Robotics pipeline)
+        if self.domain_randomization and options is None:
+            # 1. Randomize link mass and inertia
+            mass_scale = self.np_random.uniform(
+                self.rand_mass_range[0], self.rand_mass_range[1], size=self.model.nbody
+            )
+            self.model.body_mass[:] = self.nominal_body_mass * mass_scale
+            self.model.body_inertia[:] = self.nominal_body_inertia * mass_scale[:, None]
+
+            # 2. Randomize joint damping and friction loss
+            damp_scale = self.np_random.uniform(
+                self.rand_damping_range[0], self.rand_damping_range[1], size=self.model.nv
+            )
+            self.model.dof_damping[:] = self.nominal_dof_damping * damp_scale
+
+            fric_scale = self.np_random.uniform(
+                self.rand_friction_range[0], self.rand_friction_range[1], size=self.model.nv
+            )
+            self.model.dof_frictionloss[:] = self.nominal_dof_frictionloss * fric_scale
+
+            # 3. Randomize ground contact friction
+            fric_contact_scale = float(
+                self.np_random.uniform(self.rand_friction_range[0], self.rand_friction_range[1])
+            )
+            self.model.geom_friction[:, 0] = self.nominal_geom_friction[:, 0] * fric_contact_scale
+
+            # 4. Randomize servo actuator strength scale (simulating battery voltage drop)
+            self.actuator_strength_scale = float(
+                self.np_random.uniform(self.rand_actuator_range[0], self.rand_actuator_range[1])
+            )
+        else:
+            # Restore nominal parameters
+            self.model.body_mass[:] = self.nominal_body_mass
+            self.model.body_inertia[:] = self.nominal_body_inertia
+            self.model.dof_damping[:] = self.nominal_dof_damping
+            self.model.dof_frictionloss[:] = self.nominal_dof_frictionloss
+            self.model.geom_friction[:] = self.nominal_geom_friction
+            self.actuator_strength_scale = 1.0
+
+        if (self.randomize_pose_offset or self.domain_randomization) and options is None:
             offset_deg = (
                 float(self.np_random.uniform(-10.0, 10.0)),
                 float(self.np_random.uniform(-10.0, 10.0)),
@@ -297,8 +364,17 @@ class Robo1GetupEnv(gym.Env):
         action = np.clip(action, -1.0, 1.0)
 
         old_target = self.target.copy()
-        self.target += action * self.target_delta
+        effective_delta = self.target_delta * self.actuator_strength_scale
+        self.target += action * effective_delta
         self.target = np.clip(self.target, -self.target_limit, self.target_limit)
+
+        # Disturbance push perturbations during training (sim-to-real transfer)
+        if self.random_pushes and self.np_random.random() < 0.02 and self.applied_force_steps == 0:
+            push_angle = self.np_random.uniform(0, 2 * math.pi)
+            push_mag = self.np_random.uniform(0.5, 1.8)
+            fx = push_mag * math.cos(push_angle)
+            fy = push_mag * math.sin(push_angle)
+            self.apply_external_force([fx, fy, 0.0], duration_env_steps=2)
 
         for _ in range(self.frame_skip):
             if self.applied_force_steps > 0:
@@ -337,9 +413,12 @@ class Robo1GetupEnv(gym.Env):
         action_cost = 0.001 * float(np.sum(action ** 2))
         servo_motion_cost = stand_gate * 0.02 * float(np.sum((self.target - old_target) ** 2))
 
+        upright_reward = 3.0 * upright
+        progress_reward = 8.0 * upright_progress
+
         reward = (
-            3.0 * upright
-            + 8.0 * upright_progress
+            upright_reward
+            + progress_reward
             - tilt_cost
             - servo_zero_cost
             - target_zero_cost
@@ -358,14 +437,30 @@ class Robo1GetupEnv(gym.Env):
             and abs(foot_height_error) < 0.04
         )
 
+        goal_bonus = 3.0 if goal_pose else 0.0
         if goal_pose:
             self.success_count += 1
-            reward += 3.0
+            reward += goal_bonus
         else:
             self.success_count = 0
 
         terminated = self.success_count >= 40
         truncated = self.step_count >= self.max_steps
+
+        reward_breakdown = {
+            "reward_upright": float(upright_reward),
+            "reward_progress": float(progress_reward),
+            "reward_goal": float(goal_bonus),
+            "cost_tilt": float(tilt_cost),
+            "cost_servo_zero": float(servo_zero_cost),
+            "cost_target_zero": float(target_zero_cost),
+            "cost_height": float(height_cost),
+            "cost_body_vel": float(body_vel_cost),
+            "cost_servo_vel": float(servo_vel_cost),
+            "cost_action": float(action_cost),
+            "cost_servo_motion": float(servo_motion_cost),
+            "total_reward": float(reward),
+        }
 
         info = {
             "pose": self.current_pose_name,
@@ -375,6 +470,7 @@ class Robo1GetupEnv(gym.Env):
             "goal_pose": goal_pose,
             "target": self.target.copy(),
             "success_count": self.success_count,
+            "reward_breakdown": reward_breakdown,
         }
 
         if self.render_mode == "human":
