@@ -1,25 +1,30 @@
-"""Gymnasium Environment for SelfRisingRobot (robo1).
+"""Gymnasium environment for the SelfRisingRobot (robo1) get-up task.
 
-Wraps MuJoCo simulation of robo1.xml for training self-righting policies
-using Reinforcement Learning (PPO).
+Observation (5,) float32 — only what the real ESP32 can measure:
+    [0] roll     MPU-6050 tilt about body X, atan2(ay, sqrt(ax^2+az^2))   rad
+    [1] pitch    MPU-6050 tilt about body Y, atan2(-ax, sqrt(ay^2+az^2))  rad
+    [2] az       MPU-6050 Z acceleration in g (+1 upright, -1 upside down)
+    [3] target1  current servo1 set-point                      [-1.55, 1.55] rad
+    [4] target2  current servo2 set-point                      [-1.55, 1.55] rad
+    roll/pitch alone read ~0 both upright and upside down; az disambiguates.
 
-Observation Space:
-    [0] base_roll:   Roll angle of foot base [-pi, pi]
-    [1] base_pitch:  Pitch angle of foot base [-pi, pi]
-    [2] servo1_cmd:  Current target angle of servo1 [-1.55, 1.55] rad
-    [3] servo2_cmd:  Current target angle of servo2 [-1.55, 1.55] rad
+Action (2,) float32 in [-1, 1]:
+    Servo set-point increment, target += action * 0.08 rad, at 50 Hz.
 
-Action Space:
-    [0] delta_servo1: Normalized rate of change for servo1 [-1.0, 1.0]
-    [1] delta_servo2: Normalized rate of change for servo2 [-1.0, 1.0]
-    Mapped to target angle updates: target += action * 0.08 rad (at 50 Hz).
+Start states (every reset draws one):
+    "roll_pos", "roll_neg", "pitch_pos", "pitch_neg"  the four canonical falls
+    "random"   any orientation (incl. upside down), any yaw, random servo angles
+    "upright"  already standing, so the policy also learns to hold still
+
+An episode succeeds (terminated=True) once the goal pose is held for
+HOLD_STEPS consecutive control steps. It is truncated after max_steps.
 """
 
 from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import gymnasium as gym
 import mujoco
@@ -32,516 +37,277 @@ FALLEN_POSES = {
     "pitch_pos": (0.0, math.pi / 2.0),
     "pitch_neg": (0.0, -math.pi / 2.0),
 }
-DEFAULT_FALLEN_POSES = tuple(FALLEN_POSES.keys())
+START_CASES = (*FALLEN_POSES, "random", "upright")
+# Sampling weights for START_CASES during training (must sum to 1).
+DEFAULT_CASE_WEIGHTS = (0.15, 0.15, 0.15, 0.15, 0.30, 0.10)
+
+HOLD_STEPS = 40  # 0.8 s at 50 Hz
 
 
-def roll_pitch_to_quat(roll: float, pitch: float) -> np.ndarray:
-    """Convert Euler roll and pitch (yaw=0) to quaternion [w, x, y, z]."""
-    cr = math.cos(roll / 2.0)
-    sr = math.sin(roll / 2.0)
-    cp = math.cos(pitch / 2.0)
-    sp = math.sin(pitch / 2.0)
-    return np.array([cr * cp, sr * cp, cr * sp, -sr * sp], dtype=np.float64)
-
-
-def quat_to_roll_pitch(q: np.ndarray) -> Tuple[float, float]:
-    """Convert quaternion [w, x, y, z] to roll and pitch angles in radians."""
-    w, x, y, z = q
-    sinr_cosp = 2.0 * (w * x + y * z)
-    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
-    roll = math.atan2(sinr_cosp, cosr_cosp)
-
-    sinp = 2.0 * (w * y - z * x)
-    sinp = max(-1.0, min(1.0, sinp))
-    pitch = math.asin(sinp)
-    return roll, pitch
+def euler_to_quat(roll: float, pitch: float, yaw: float = 0.0) -> np.ndarray:
+    """ZYX Euler angles -> quaternion [w, x, y, z]."""
+    cr, sr = math.cos(roll / 2), math.sin(roll / 2)
+    cp, sp = math.cos(pitch / 2), math.sin(pitch / 2)
+    cy, sy = math.cos(yaw / 2), math.sin(yaw / 2)
+    return np.array(
+        [
+            cr * cp * cy + sr * sp * sy,
+            sr * cp * cy - cr * sp * sy,
+            cr * sp * cy + sr * cp * sy,
+            cr * cp * sy - sr * sp * cy,
+        ]
+    )
 
 
 class Robo1GetupEnv(gym.Env):
-    """Gymnasium environment for robo1 self-rising task."""
-
-    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 50}
+    metadata = {"render_modes": ["human"], "render_fps": 50}
 
     def __init__(
         self,
         xml_path: Optional[str] = None,
-        fallen_poses: Optional[Tuple[str, ...]] = None,
         render_mode: Optional[str] = None,
-        randomize_pose_offset: bool = False,
+        cases: Tuple[str, ...] = START_CASES,
+        case_weights: Optional[Tuple[float, ...]] = None,
         domain_randomization: bool = False,
-        rand_mass_range: Tuple[float, float] = (0.85, 1.15),
-        rand_damping_range: Tuple[float, float] = (0.80, 1.20),
-        rand_friction_range: Tuple[float, float] = (0.80, 1.20),
-        rand_actuator_range: Tuple[float, float] = (0.85, 1.15),
         sensor_noise_std: float = 0.015,
-        random_pushes: bool = False,
     ):
         super().__init__()
+        unknown = set(cases) - set(START_CASES)
+        if unknown:
+            raise ValueError(f"Unknown start cases {unknown}; choose from {START_CASES}")
         self.render_mode = render_mode
-        self.randomize_pose_offset = randomize_pose_offset
+        self.cases = tuple(cases)
+        if case_weights is None:
+            if self.cases == START_CASES:
+                case_weights = DEFAULT_CASE_WEIGHTS
+            else:
+                case_weights = (1.0,) * len(self.cases)
+        w = np.asarray(case_weights, dtype=np.float64)
+        self.case_probs = w / w.sum()
         self.domain_randomization = domain_randomization
-        self.rand_mass_range = rand_mass_range
-        self.rand_damping_range = rand_damping_range
-        self.rand_friction_range = rand_friction_range
-        self.rand_actuator_range = rand_actuator_range
         self.sensor_noise_std = sensor_noise_std
-        self.random_pushes = random_pushes
 
-        # Resolve XML path relative to this file if not specified
         if xml_path is None:
             xml_path = str(Path(__file__).parent / "robo1.xml")
-        self.xml_path = str(Path(xml_path).resolve())
-
-        self.model = mujoco.MjModel.from_xml_path(self.xml_path)
+        self.model = mujoco.MjModel.from_xml_path(str(Path(xml_path).resolve()))
         self.data = mujoco.MjData(self.model)
 
-        # Simulation timing parameters
-        # timestep = 0.001s, frame_skip = 20 -> 50 Hz control loop (matches real SG90 PWM)
+        # 1 ms physics x 20 = 50 Hz control loop (matches the ESP32 loop).
         self.frame_skip = 20
-        self.max_steps = 700
-        self.target_delta = 0.08  # max change per 50Hz step (rad)
-        self.target_limit = 1.55   # servo joint limit (~pi/2 rad)
-        self.settle_steps = 200    # simulation steps to settle on the floor
+        self.dt = self.model.opt.timestep * self.frame_skip
+        self.max_steps = 700  # 14 s
+        self.target_delta = 0.08
+        self.target_limit = 1.55
+        self.settle_steps = 500
 
-        self.fallen_poses = list(fallen_poses or DEFAULT_FALLEN_POSES)
-        self.current_pose_name = self.fallen_poses[0]
+        self.foot_id = self.model.body("foot").id
+        j1, j2 = self.model.joint("servo1_joint"), self.model.joint("servo2_joint")
+        self.servo_qpos = np.array([j1.qposadr[0], j2.qposadr[0]])
+        self.servo_qvel = np.array([j1.dofadr[0], j2.dofadr[0]])
+        # Robot geoms that collide with the floor (used to place the robot on the ground).
+        self._robot_geoms = np.where(
+            (self.model.geom_bodyid != 0) & (self.model.geom_contype != 0)
+        )[0]
 
-        # Model IDs for fast state lookups
-        self.foot_body_id = mujoco.mj_name2id(
-            self.model, mujoco.mjtObj.mjOBJ_BODY, "foot"
-        )
-        self.servo1_qpos_id = self.model.jnt_qposadr[
-            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "servo1_joint")
-        ]
-        self.servo2_qpos_id = self.model.jnt_qposadr[
-            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "servo2_joint")
-        ]
-        self.servo1_qvel_id = self.model.jnt_dofadr[
-            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "servo1_joint")
-        ]
-        self.servo2_qvel_id = self.model.jnt_dofadr[
-            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "servo2_joint")
-        ]
-
-        self.arm2_body_id = mujoco.mj_name2id(
-            self.model, mujoco.mjtObj.mjOBJ_BODY, "arm2"
-        )
-        self.applied_force = np.zeros(3, dtype=np.float64)
-        self.applied_force_steps = 0
-        self.applied_force_body_id = self.arm2_body_id
-        self.interactive_push_magnitude = 2.0  # Newtons
-
-        self.standing_height = self._compute_standing_height()
-
-        # Action space: normalized deltas in [-1, 1] for [servo1, servo2]
-        self.action_space = spaces.Box(
-            low=-1.0, high=1.0, shape=(2,), dtype=np.float32
-        )
-
-        # Observation space: [roll, pitch, servo1_target, servo2_target]
+        self.action_space = spaces.Box(-1.0, 1.0, shape=(2,), dtype=np.float32)
+        lim = self.target_limit
         self.observation_space = spaces.Box(
-            low=np.array([-math.pi, -math.pi, -1.55, -1.55], dtype=np.float32),
-            high=np.array([math.pi, math.pi, 1.55, 1.55], dtype=np.float32),
+            low=np.array([-math.pi, -math.pi, -1.5, -lim, -lim], dtype=np.float32),
+            high=np.array([math.pi, math.pi, 1.5, lim, lim], dtype=np.float32),
             dtype=np.float32,
         )
 
+        self._nominal = {
+            "body_mass": self.model.body_mass.copy(),
+            "body_inertia": self.model.body_inertia.copy(),
+            "dof_damping": self.model.dof_damping.copy(),
+            "dof_frictionloss": self.model.dof_frictionloss.copy(),
+            "geom_friction": self.model.geom_friction.copy(),
+        }
+        self.actuator_scale = 1.0
+
+        self.target = np.zeros(2)
         self.step_count = 0
-        self.target = np.zeros(2, dtype=np.float64)
-        self.success_count = 0
+        self.hold_count = 0
         self.prev_upright = 0.0
+        self.case = self.cases[0]
         self._viewer = None
 
-        # Store nominal physics parameters for domain randomization (sim-to-real)
-        self.nominal_body_mass = self.model.body_mass.copy()
-        self.nominal_body_inertia = self.model.body_inertia.copy()
-        self.nominal_dof_damping = self.model.dof_damping.copy()
-        self.nominal_dof_frictionloss = self.model.dof_frictionloss.copy()
-        self.nominal_geom_friction = self.model.geom_friction.copy()
-        self.actuator_strength_scale = 1.0
+        self.standing_height = self._measure_standing_height()
 
-    def _compute_standing_height(self) -> float:
-        """Measure the resting foot height when the robot is standing upright."""
-        data = mujoco.MjData(self.model)
-        data.qpos[:] = 0.0
-        data.qvel[:] = 0.0
-        data.qpos[0:3] = [0.0, 0.0, 0.08]
-        data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
-        data.qpos[self.servo1_qpos_id] = 0.0
-        data.qpos[self.servo2_qpos_id] = 0.0
-        data.ctrl[:] = 0.0
-        mujoco.mj_forward(self.model, data)
-
-        for _ in range(self.settle_steps):
-            data.ctrl[:] = 0.0
-            mujoco.mj_step(self.model, data)
-
-        return float(data.xpos[self.foot_body_id, 2])
-
-    def _set_fallen_pose(self, pose_name: str, offset_deg: Tuple[float, float] = (0.0, 0.0)):
-        """Initialize robot in a fallen resting pose on the ground plane."""
-        self.data.qpos[:] = 0.0
-        self.data.qvel[:] = 0.0
-        self.data.qpos[0:3] = [0.0, 0.0, 0.08]
-
-        base_roll, base_pitch = FALLEN_POSES[pose_name]
-        roll = base_roll + math.radians(offset_deg[0])
-        pitch = base_pitch + math.radians(offset_deg[1])
-
-        self.data.qpos[3:7] = roll_pitch_to_quat(roll, pitch)
-        self.data.qpos[self.servo1_qpos_id] = 0.0
-        self.data.qpos[self.servo2_qpos_id] = 0.0
-
-        self.target[:] = 0.0
-        self.data.ctrl[:] = self.target
+    # ------------------------------------------------------------------ state
+    def _place_on_ground(self, quat: np.ndarray, servo: np.ndarray):
+        """Set orientation and servo angles, lift the robot so it touches the floor, let it settle."""
+        mujoco.mj_resetData(self.model, self.data)
+        self.data.qpos[3:7] = quat
+        self.data.qpos[self.servo_qpos] = servo
+        self.target[:] = servo
         mujoco.mj_forward(self.model, self.data)
-
-        # Allow physics to settle onto ground
+        self.data.qpos[2] += 0.005 - self._lowest_point()
+        mujoco.mj_forward(self.model, self.data)
         for _ in range(self.settle_steps):
             self.data.ctrl[:] = self.target
             mujoco.mj_step(self.model, self.data)
 
-        self.target[:] = 0.0
-        self.data.ctrl[:] = self.target
+    def _lowest_point(self) -> float:
+        """Lowest world z over the corners of every robot geom's bounding box."""
+        signs = np.array([[sx, sy, sz] for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)])
+        lowest = np.inf
+        for g in self._robot_geoms:
+            center, half = self.model.geom_aabb[g, :3], self.model.geom_aabb[g, 3:]
+            corners = center + signs * half
+            world = self.data.geom_xpos[g] + corners @ self.data.geom_xmat[g].reshape(3, 3).T
+            lowest = min(lowest, world[:, 2].min())
+        return float(lowest)
 
-    def _compute_orientation_tilt(self) -> Tuple[float, float]:
-        """Compute continuous, yaw-invariant roll and pitch tilt angles matching MPU6050.
-        
-        Uses the projection of world upward vertical (opposite of gravity) onto the
-        robot base's body frame axes. This eliminates Euler angle gimbal-lock flips
-        and accurately models the microcontroller's accelerometer/complementary filter.
-        """
-        xmat = self.data.xmat[self.foot_body_id].reshape(3, 3)
-        ax, ay, az = float(xmat[0, 2]), float(xmat[1, 2]), float(xmat[2, 2])
-        # Aligned convention:
-        # roll: tilt about body X axis (positive tilts right)
-        roll = math.atan2(-ay, math.sqrt(ax * ax + az * az))
-        # pitch: tilt about body Y axis (positive tilts forward)
-        pitch = math.atan2(ax, math.sqrt(ay * ay + az * az))
+    def _measure_standing_height(self) -> float:
+        self._place_on_ground(np.array([1.0, 0, 0, 0]), np.zeros(2))
+        return float(self.data.xpos[self.foot_id, 2])
+
+    def _tilt(self) -> Tuple[float, float]:
+        """Yaw-invariant roll/pitch from the gravity vector in the body frame (as the IMU sees it)."""
+        xmat = self.data.xmat[self.foot_id].reshape(3, 3)
+        # Row 2 of R = world Z in the body frame. Signs keep the original roll/pitch convention.
+        ax, ay, az = -xmat[2, 0], -xmat[2, 1], xmat[2, 2]
+        roll = math.atan2(-ay, math.hypot(ax, az))
+        pitch = math.atan2(ax, math.hypot(ay, az))
         return roll, pitch
 
-    def _get_obs(self) -> np.ndarray:
-        """Compute the 4D observation vector [roll, pitch, target1, target2]."""
-        roll, pitch = self._compute_orientation_tilt()
-        if self.domain_randomization and self.sensor_noise_std > 0.0:
-            # Sim-to-Real: Add Gaussian noise matching physical MPU-6050 noise & complementary filter drift
-            noise = self.np_random.normal(0.0, self.sensor_noise_std, size=2)
-            roll = float(np.clip(roll + noise[0], -math.pi, math.pi))
-            pitch = float(np.clip(pitch + noise[1], -math.pi, math.pi))
-
-        return np.array(
-            [
-                roll,
-                pitch,
-                self.target[0],
-                self.target[1],
-            ],
-            dtype=np.float32,
-        )
-
-    def apply_external_force(
-        self,
-        force_xyz: Tuple[float, float, float] | np.ndarray,
-        duration_env_steps: int = 1,
-        body_name: str = "arm2",
-    ):
-        """Apply external 3D perturbation force (Newtons) to a robot body.
-        
-        Args:
-            force_xyz: Force vector [Fx, Fy, Fz] in Newtons (world frame).
-            duration_env_steps: Number of environment steps (at 50 Hz) to apply the force.
-            body_name: Name of target body ('arm2' for head/top body, 'foot' for base).
-        """
-        body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, body_name)
-        if body_id < 0:
-            body_id = self.arm2_body_id
-        self.applied_force_body_id = body_id
-        self.applied_force = np.asarray(force_xyz, dtype=np.float64)
-        self.applied_force_steps = max(1, duration_env_steps)
-
     def _upright(self) -> float:
-        """Measure uprightness from Z component of base orientation matrix."""
-        xmat = self.data.xmat[self.foot_body_id].reshape(3, 3)
-        return float(xmat[2, 2])
+        """cos(tilt): 1 upright, 0 on its side, -1 upside down."""
+        return float(self.data.xmat[self.foot_id, 8])
 
-    def _foot_height(self) -> float:
-        return float(self.data.xpos[self.foot_body_id, 2])
+    def _get_obs(self) -> np.ndarray:
+        roll, pitch = self._tilt()
+        az = self._upright()
+        if self.domain_randomization and self.sensor_noise_std > 0:
+            roll, pitch, az = np.array([roll, pitch, az]) + self.np_random.normal(
+                0, self.sensor_noise_std, size=3
+            )
+        return np.array([roll, pitch, az, *self.target], dtype=np.float32)
 
-    def _servo_angles(self) -> np.ndarray:
-        return np.array(
-            [
-                self.data.qpos[self.servo1_qpos_id],
-                self.data.qpos[self.servo2_qpos_id],
-            ],
-            dtype=np.float64,
-        )
+    def _randomize_physics(self):
+        n = self._nominal
+        m = self.model
+        u = self.np_random.uniform
+        mass_scale = u(0.85, 1.15, size=m.nbody)
+        m.body_mass[:] = n["body_mass"] * mass_scale
+        m.body_inertia[:] = n["body_inertia"] * mass_scale[:, None]
+        m.dof_damping[:] = n["dof_damping"] * u(0.8, 1.2, size=m.nv)
+        m.dof_frictionloss[:] = n["dof_frictionloss"] * u(0.8, 1.2, size=m.nv)
+        m.geom_friction[:] = n["geom_friction"]
+        m.geom_friction[:, 0] *= u(0.8, 1.2)
+        self.actuator_scale = float(u(0.85, 1.15))  # battery sag -> slower servos
 
-    def _servo_velocities(self) -> np.ndarray:
-        return np.array(
-            [
-                self.data.qvel[self.servo1_qvel_id],
-                self.data.qvel[self.servo2_qvel_id],
-            ],
-            dtype=np.float64,
-        )
+    def _restore_physics(self):
+        for name, value in self._nominal.items():
+            getattr(self.model, name)[:] = value
+        self.actuator_scale = 1.0
 
+    # ------------------------------------------------------------ gym API
     def reset(
-        self,
-        *,
-        seed: Optional[int] = None,
-        options: Optional[Dict[str, Any]] = None,
+        self, *, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None
     ) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """options: {"case": one of START_CASES} forces the start case."""
         super().reset(seed=seed)
-        self.step_count = 0
-        self.success_count = 0
-        self.applied_force_steps = 0
-        self.applied_force[:] = 0.0
-        self.data.xfrc_applied[:] = 0.0
+        options = options or {}
+        case = options.get("case") or str(self.np_random.choice(self.cases, p=self.case_probs))
+        if case not in START_CASES:
+            raise ValueError(f"Unknown case {case!r}")
+        self.case = case
 
-        pose_name = None
-        offset_deg = (0.0, 0.0)
-        if options is not None:
-            pose_name = options.get("pose")
-            offset_deg = options.get("offset", (0.0, 0.0))
-
-        if pose_name is None:
-            pose_name = self.np_random.choice(self.fallen_poses)
-
-        # Sim-to-Real Domain Randomization (Meta-Quantum / Kevin Wood RL Robotics pipeline)
-        if self.domain_randomization and options is None:
-            # 1. Randomize link mass and inertia
-            mass_scale = self.np_random.uniform(
-                self.rand_mass_range[0], self.rand_mass_range[1], size=self.model.nbody
-            )
-            self.model.body_mass[:] = self.nominal_body_mass * mass_scale
-            self.model.body_inertia[:] = self.nominal_body_inertia * mass_scale[:, None]
-
-            # 2. Randomize joint damping and friction loss
-            damp_scale = self.np_random.uniform(
-                self.rand_damping_range[0], self.rand_damping_range[1], size=self.model.nv
-            )
-            self.model.dof_damping[:] = self.nominal_dof_damping * damp_scale
-
-            fric_scale = self.np_random.uniform(
-                self.rand_friction_range[0], self.rand_friction_range[1], size=self.model.nv
-            )
-            self.model.dof_frictionloss[:] = self.nominal_dof_frictionloss * fric_scale
-
-            # 3. Randomize ground contact friction
-            fric_contact_scale = float(
-                self.np_random.uniform(self.rand_friction_range[0], self.rand_friction_range[1])
-            )
-            self.model.geom_friction[:, 0] = self.nominal_geom_friction[:, 0] * fric_contact_scale
-
-            # 4. Randomize servo actuator strength scale (simulating battery voltage drop)
-            self.actuator_strength_scale = float(
-                self.np_random.uniform(self.rand_actuator_range[0], self.rand_actuator_range[1])
-            )
+        if self.domain_randomization:
+            self._randomize_physics()
         else:
-            # Restore nominal parameters
-            self.model.body_mass[:] = self.nominal_body_mass
-            self.model.body_inertia[:] = self.nominal_body_inertia
-            self.model.dof_damping[:] = self.nominal_dof_damping
-            self.model.dof_frictionloss[:] = self.nominal_dof_frictionloss
-            self.model.geom_friction[:] = self.nominal_geom_friction
-            self.actuator_strength_scale = 1.0
+            self._restore_physics()
 
-        if (self.randomize_pose_offset or self.domain_randomization) and options is None:
-            offset_deg = (
-                float(self.np_random.uniform(-10.0, 10.0)),
-                float(self.np_random.uniform(-10.0, 10.0)),
-            )
+        rng = self.np_random
+        yaw = rng.uniform(-math.pi, math.pi)
+        if case in FALLEN_POSES:
+            roll, pitch = FALLEN_POSES[case]
+            roll += math.radians(rng.uniform(-10, 10))
+            pitch += math.radians(rng.uniform(-10, 10))
+            quat, servo = euler_to_quat(roll, pitch, yaw), np.zeros(2)
+        elif case == "random":
+            # Uniformly random rotation, so every fall direction (and upside down) is covered.
+            q = rng.normal(size=4)
+            quat = q / np.linalg.norm(q)
+            servo = rng.uniform(-self.target_limit, self.target_limit, size=2)
+        else:  # upright
+            quat, servo = euler_to_quat(0.0, 0.0, yaw), np.zeros(2)
 
-        self.current_pose_name = str(pose_name)
-        self._set_fallen_pose(self.current_pose_name, offset_deg)
+        self._place_on_ground(quat, servo)
+        self.step_count = 0
+        self.hold_count = 0
         self.prev_upright = self._upright()
+        return self._get_obs(), {"case": case}
 
-        return self._get_obs(), {"pose": self.current_pose_name}
-
-    def step(
-        self, action: np.ndarray
-    ) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
-        action = np.asarray(action, dtype=np.float64)
-        action = np.clip(action, -1.0, 1.0)
-
+    def step(self, action: np.ndarray):
+        action = np.clip(np.asarray(action, dtype=np.float64), -1.0, 1.0)
         old_target = self.target.copy()
-        effective_delta = self.target_delta * self.actuator_strength_scale
-        self.target += action * effective_delta
-        self.target = np.clip(self.target, -self.target_limit, self.target_limit)
-
-        # Disturbance push perturbations during training (sim-to-real transfer)
-        if self.random_pushes and self.np_random.random() < 0.02 and self.applied_force_steps == 0:
-            push_angle = self.np_random.uniform(0, 2 * math.pi)
-            push_mag = self.np_random.uniform(0.5, 1.8)
-            fx = push_mag * math.cos(push_angle)
-            fy = push_mag * math.sin(push_angle)
-            self.apply_external_force([fx, fy, 0.0], duration_env_steps=2)
-
+        self.target = np.clip(
+            self.target + action * self.target_delta * self.actuator_scale,
+            -self.target_limit,
+            self.target_limit,
+        )
         for _ in range(self.frame_skip):
-            if self.applied_force_steps > 0:
-                self.data.xfrc_applied[self.applied_force_body_id, :3] = self.applied_force
-            else:
-                self.data.xfrc_applied[self.applied_force_body_id, :3] = 0.0
-
             self.data.ctrl[:] = self.target
             mujoco.mj_step(self.model, self.data)
-
-        if self.applied_force_steps > 0:
-            self.applied_force_steps -= 1
-            if self.applied_force_steps == 0:
-                self.data.xfrc_applied[self.applied_force_body_id, :3] = 0.0
-
         self.step_count += 1
+
         obs = self._get_obs()
-
+        roll, pitch = self._tilt()
         upright = self._upright()
-        upright_progress = upright - self.prev_upright
+        progress = upright - self.prev_upright
         self.prev_upright = upright
-        roll, pitch = float(obs[0]), float(obs[1])
-        servo_angles = self._servo_angles()
-        servo_velocities = self._servo_velocities()
-        foot_height_error = self._foot_height() - self.standing_height
+        servo = self.data.qpos[self.servo_qpos]
+        servo_vel = self.data.qvel[self.servo_qvel]
+        height_err = float(self.data.xpos[self.foot_id, 2]) - self.standing_height
 
-        # Reward formulation
-        # stand_gate smoothly transitions from 0 (fallen) to 1 (standing upright)
-        stand_gate = float(np.clip((upright - 0.65) / 0.35, 0.0, 1.0))
-        tilt_cost = 0.2 * (roll * roll + pitch * pitch)
-        servo_zero_cost = stand_gate * 0.5 * float(np.sum(servo_angles * servo_angles))
-        target_zero_cost = stand_gate * 0.2 * float(np.sum(self.target * self.target))
-        height_cost = stand_gate * 5.0 * (foot_height_error * foot_height_error)
-        body_vel_cost = stand_gate * 0.01 * float(np.sum(self.data.qvel[0:6] ** 2))
-        servo_vel_cost = stand_gate * 0.005 * float(np.sum(servo_velocities ** 2))
-        action_cost = 0.001 * float(np.sum(action ** 2))
-        servo_motion_cost = stand_gate * 0.02 * float(np.sum((self.target - old_target) ** 2))
-
-        upright_reward = 3.0 * upright
-        progress_reward = 8.0 * upright_progress
-
+        # stand_gate: 0 while fallen, 1 when upright -> "stand still" costs only apply once up.
+        gate = float(np.clip((upright - 0.65) / 0.35, 0.0, 1.0))
         reward = (
-            upright_reward
-            + progress_reward
-            - tilt_cost
-            - servo_zero_cost
-            - target_zero_cost
-            - height_cost
-            - body_vel_cost
-            - servo_vel_cost
-            - action_cost
-            - servo_motion_cost
+            3.0 * upright
+            + 8.0 * progress
+            - 0.2 * (roll**2 + pitch**2)
+            - gate * 0.5 * float(np.sum(servo**2))
+            - gate * 0.2 * float(np.sum(self.target**2))
+            - gate * 5.0 * height_err**2
+            - gate * 0.01 * float(np.sum(self.data.qvel[0:6] ** 2))
+            - gate * 0.005 * float(np.sum(servo_vel**2))
+            - gate * 0.02 * float(np.sum((self.target - old_target) ** 2))
+            - 0.001 * float(np.sum(action**2))
         )
 
-        goal_pose = (
+        goal = (
             upright > 0.92
             and abs(roll) < 0.35
             and abs(pitch) < 0.35
-            and np.max(np.abs(servo_angles)) < 0.25
-            and abs(foot_height_error) < 0.04
+            and float(np.max(np.abs(servo))) < 0.25
+            and abs(height_err) < 0.04
         )
-
-        goal_bonus = 3.0 if goal_pose else 0.0
-        if goal_pose:
-            self.success_count += 1
-            reward += goal_bonus
+        if goal:
+            self.hold_count += 1
+            reward += 3.0
         else:
-            self.success_count = 0
+            self.hold_count = 0
 
-        terminated = self.success_count >= 40
+        terminated = self.hold_count >= HOLD_STEPS
         truncated = self.step_count >= self.max_steps
-
-        reward_breakdown = {
-            "reward_upright": float(upright_reward),
-            "reward_progress": float(progress_reward),
-            "reward_goal": float(goal_bonus),
-            "cost_tilt": float(tilt_cost),
-            "cost_servo_zero": float(servo_zero_cost),
-            "cost_target_zero": float(target_zero_cost),
-            "cost_height": float(height_cost),
-            "cost_body_vel": float(body_vel_cost),
-            "cost_servo_vel": float(servo_vel_cost),
-            "cost_action": float(action_cost),
-            "cost_servo_motion": float(servo_motion_cost),
-            "total_reward": float(reward),
-        }
-
-        info = {
-            "pose": self.current_pose_name,
-            "upright": upright,
-            "foot_height_error": foot_height_error,
-            "servo_angles": servo_angles.copy(),
-            "goal_pose": goal_pose,
-            "target": self.target.copy(),
-            "success_count": self.success_count,
-            "reward_breakdown": reward_breakdown,
-        }
+        info = {"case": self.case, "upright": upright, "goal_pose": goal, "is_success": terminated}
 
         if self.render_mode == "human":
             self.render()
-
-        return obs, reward, terminated, truncated, info
-
-    def _print_push_help(self):
-        print("\n" + "=" * 60)
-        print("  MuJoCo Viewer Interactive Force Perturbation Controls:")
-        print("    [F] / [Up Arrow]    : Push Forward (+X)")
-        print("    [B] / [Down Arrow]  : Push Backward (-X)")
-        print("    [L] / [Left Arrow]  : Push Left (+Y)")
-        print("    [R] / [Right Arrow] : Push Right (-Y)")
-        print("    [Space] / [K]       : Hard Knockdown (topple the robot)")
-        print("    [P]                 : Random Direction Push")
-        print(f"    [+] / [-]           : Adjust Force (Current: {self.interactive_push_magnitude:.1f} N)")
-        print("    [H]                 : Show this help menu")
-        print("    [Mouse Drag]        : Right-click & drag on robot in viewer")
-        print("=" * 60 + "\n")
-
-    def _on_key(self, keycode: int):
-        """Handle keyboard push perturbations inside the MuJoCo viewer window."""
-        mag = self.interactive_push_magnitude
-        if keycode in (ord('f'), ord('F'), 265):
-            self.apply_external_force([mag, 0.0, 0.0], duration_env_steps=2)
-            print(f"\n>>> [Force Perturbation] Pushed FORWARD (+X) with {mag:.1f} N!")
-        elif keycode in (ord('b'), ord('B'), 264):
-            self.apply_external_force([-mag, 0.0, 0.0], duration_env_steps=2)
-            print(f"\n>>> [Force Perturbation] Pushed BACKWARD (-X) with {mag:.1f} N!")
-        elif keycode in (ord('l'), ord('L'), 263):
-            self.apply_external_force([0.0, mag, 0.0], duration_env_steps=2)
-            print(f"\n>>> [Force Perturbation] Pushed LEFT (+Y) with {mag:.1f} N!")
-        elif keycode in (ord('r'), ord('R'), 262):
-            self.apply_external_force([0.0, -mag, 0.0], duration_env_steps=2)
-            print(f"\n>>> [Force Perturbation] Pushed RIGHT (-Y) with {mag:.1f} N!")
-        elif keycode in (ord('k'), ord('K'), 32):
-            knock_force = max(2.5, mag * 1.5)
-            theta = np.random.uniform(0, 2 * math.pi)
-            fx = knock_force * math.cos(theta)
-            fy = knock_force * math.sin(theta)
-            self.apply_external_force([fx, fy, 0.0], duration_env_steps=3)
-            print(f"\n>>> [Force Perturbation] HARD KNOCKDOWN ({knock_force:.1f} N) applied to topple robot!")
-        elif keycode in (ord('p'), ord('P')):
-            theta = np.random.uniform(0, 2 * math.pi)
-            fx = mag * math.cos(theta)
-            fy = mag * math.sin(theta)
-            self.apply_external_force([fx, fy, 0.0], duration_env_steps=2)
-            print(f"\n>>> [Force Perturbation] Random push ({mag:.1f} N) applied!")
-        elif keycode in (ord('+'), ord('=')):
-            self.interactive_push_magnitude = min(10.0, self.interactive_push_magnitude + 0.5)
-            print(f"\n>>> [Config] Push force increased to: {self.interactive_push_magnitude:.1f} N")
-        elif keycode in (ord('-'), ord('_')):
-            self.interactive_push_magnitude = max(0.5, self.interactive_push_magnitude - 0.5)
-            print(f"\n>>> [Config] Push force decreased to: {self.interactive_push_magnitude:.1f} N")
-        elif keycode in (ord('h'), ord('H')):
-            self._print_push_help()
+        return obs, float(reward), terminated, truncated, info
 
     def render(self):
-        if self.render_mode == "human":
-            if self._viewer is None:
-                import mujoco.viewer
-                self._viewer = mujoco.viewer.launch_passive(
-                    self.model, self.data, key_callback=self._on_key
-                )
-                self._print_push_help()
-            self._viewer.sync()
-        elif self.render_mode == "rgb_array":
-            renderer = mujoco.Renderer(self.model, 480, 640)
-            renderer.update_scene(self.data, camera="front")
-            return renderer.render()
+        if self.render_mode != "human":
+            return
+        if self._viewer is None:
+            import mujoco.viewer
+
+            self._viewer = mujoco.viewer.launch_passive(self.model, self.data)
+        self._viewer.sync()
 
     def close(self):
         if self._viewer is not None:

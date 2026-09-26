@@ -1,0 +1,66 @@
+{
+  "model": "/home/nidharshan/Documents/5th_sem/Embedded system project/sim2real-framework/example_robots/SelfRisingRobot/robo1_getup_ppo.zip",
+  "domain_rand": false,
+  "results": [
+    {
+      "case": "roll_pos",
+      "episodes": 50,
+      "success_rate": 1.0,
+      "time_mean": 1.3636,
+      "time_median": 1.36,
+      "time_std": 0.007683749084919425,
+      "time_max": 1.3800000000000001,
+      "final_upright_mean": 0.9999997445776374
+    },
+    {
+      "case": "roll_neg",
+      "episodes": 50,
+      "success_rate": 1.0,
+      "time_mean": 1.0,
+      "time_median": 1.0,
+      "time_std": 0.0,
+      "time_max": 1.0,
+      "final_upright_mean": 0.9999995913457066
+    },
+    {
+      "case": "pitch_pos",
+      "episodes": 50,
+      "success_rate": 1.0,
+      "time_mean": 1.2599999999999998,
+      "time_median": 1.26,
+      "time_std": 2.220446049250313e-16,
+      "time_max": 1.26,
+      "final_upright_mean": 0.9999997722688312
+    },
+    {
+      "case": "pitch_neg",
+      "episodes": 50,
+      "success_rate": 1.0,
+      "time_mean": 0.7808000000000002,
+      "time_median": 0.78,
+      "time_std": 0.003919183588453088,
+      "time_max": 0.8,
+      "final_upright_mean": 0.999999605147704
+    },
+    {
+      "case": "random",
+      "episodes": 50,
+      "success_rate": 0.86,
+      "time_mean": 1.324186046511628,
+      "time_median": 1.3,
+      "time_std": 0.46258240024302966,
+      "time_max": 2.2600000000000002,
+      "final_upright_mean": 0.9526817090211419
+    },
+    {
+      "case": "upright",
+      "episodes": 50,
+      "success_rate": 1.0,
+      "time_mean": 0.02,
+      "time_median": 0.02,
+      "time_std": 0.0,
+      "time_max": 0.02,
+      "final_upright_mean": 0.9999995957581053
+    }
+  ]
+}

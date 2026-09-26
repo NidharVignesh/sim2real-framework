@@ -1,6 +1,6 @@
 # SelfRisingRobot (`robo1`) — PPO Training & Sim-to-Real Workflow
 
-This directory contains the complete simulation, reinforcement learning training pipeline, evaluation suite, and sim-to-real deployment workflow for **Robo1**, a 2-DOF self-righting robot trained using MuJoCo and Stable-Baselines3 (PPO).
+MuJoCo simulation, PPO training (Stable-Baselines3), benchmark and viewer for **Robo1**, a 2-DOF self-righting robot.
 
 ---
 
@@ -8,13 +8,14 @@ This directory contains the complete simulation, reinforcement learning training
 - [Hardware & Model Specifications](#hardware--model-specifications)
 - [RL Environment Design](#rl-environment-design)
 - [Directory Structure](#directory-structure)
-- [Step-by-Step Workflow & Bash Commands](#step-by-step-workflow--bash-commands)
-  - [1. Environment Setup](#1-environment-setup)
-  - [2. Training with PPO](#2-training-with-ppo)
-  - [3. Evaluating & Visualizing the Policy](#3-evaluating--visualizing-the-policy)
-  - [4. Sim-to-Real Export (ESP32 Deployment)](#4-sim-to-real-export-esp32-deployment)
+- [Workflow & Commands](#workflow--commands)
+  - [1. Setup](#1-setup)
+  - [2. Training](#2-training)
+  - [3. Benchmark](#3-benchmark)
+  - [4. Play in the MuJoCo Viewer](#4-play-in-the-mujoco-viewer)
+  - [5. Export for the ESP32](#5-export-for-the-esp32)
 - [Physical Deployment on ESP32](#physical-deployment-on-esp32)
-- [Troubleshooting & Tips](#troubleshooting--tips)
+- [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -41,32 +42,37 @@ The MuJoCo model (`robo1.xml`) accurately replicates the physical robot componen
 
 ## RL Environment Design
 
-The environment is implemented in [`robo1_env.py`](robo1_env.py) complying with **Gymnasium 1.x**:
+Implemented in [`robo1_env.py`](robo1_env.py) (Gymnasium 1.x).
 
-- **Observation Space (4D Continuous)**:
-  $$\mathbf{o}_t = \left[ \phi_{\text{roll}},\, \theta_{\text{pitch}},\, q_{\text{target}, 1},\, q_{\text{target}, 2} \right]$$
-  - $\phi_{\text{roll}}, \theta_{\text{pitch}} \in [-\pi, \pi]$: Roll and pitch of the base foot derived from the MPU-6050 IMU.
-  - $q_{\text{target}, 1}, q_{\text{target}, 2} \in [-1.57, 1.57]\,\text{rad}$: Current servo angle setpoints.
-  - *Why this matches real hardware*: On the ESP32, the complementary filter computes roll & pitch directly from the MPU-6050, and the servo angles are stored in local variables. No external motion-capture or privileged data is required.
+**Observation (5 values)**: only what the ESP32 can measure.
 
-- **Action Space (2D Continuous)**:
-  $$\mathbf{a}_t \in [-1, 1]^2 \implies \Delta q_i = \mathbf{a}_i \times 0.08\,\text{rad}$$
-  - Actions represent incremental position changes $\Delta q$ executed at $50\,\text{Hz}$ ($20\,\text{ms}$ control step).
-  - Maximum rate: $0.08\,\text{rad} / 0.02\,\text{s} \approx 4.0\,\text{rad/s}$ ($229^\circ/\text{s}$), strictly matching the physical SG90 servo speed limit ($0.12\,\text{s} / 60^\circ \approx 500^\circ/\text{s}$ under no load, safely de-rated).
+| # | Name | Meaning | Unit |
+|---|---|---|---|
+| 0 | `roll` | `atan2(ay, sqrt(ax² + az²))` from the MPU-6050 | rad |
+| 1 | `pitch` | `atan2(-ax, sqrt(ay² + az²))` from the MPU-6050 | rad |
+| 2 | `az` | MPU-6050 Z acceleration (+1 upright, −1 upside down) | g |
+| 3 | `target1` | current servo1 set-point, [−1.55, 1.55] | rad |
+| 4 | `target2` | current servo2 set-point, [−1.55, 1.55] | rad |
 
-- **Initial Fallen Configurations**:
-  On every episode reset, the robot is spawned randomly into one of 4 challenging initial poses:
-  1. `roll_pos`: Tilted $+90^\circ$ onto its right flank.
-  2. `roll_neg`: Tilted $-90^\circ$ onto its left flank.
-  3. `pitch_pos`: Fallen forward face-down.
-  4. `pitch_neg`: Fallen backward on its back.
+Roll and pitch alone read ≈0 both when upright and when upside down; `az` tells them apart.
 
-- **Reward Formulation**:
-  $$R_t = R_{\text{upright}} + R_{\text{height}} + R_{\text{stability}} - R_{\text{action\_penalty}}$$
-  - Upright alignment: $\mathbf{z}_{\text{base}} \cdot \mathbf{z}_{\text{world}} = \cos(\text{tilt})$.
-  - Upright height bonus: awards points when base elevation $z > 0.045\,\text{m}$.
-  - Stability bonus: granted when upright with low angular velocities ($|\omega| < 0.5\,\text{rad/s}$).
-  - Smoothness penalty: penalizes large action jerks to protect real servo gears.
+**Action (2 values in [−1, 1])**: servo set-point increment, `target += action × 0.08 rad`, at 50 Hz (20 ms per step).
+
+**Start cases**: every reset draws one of:
+
+| Case | Share | Description |
+|---|---|---|
+| `roll_pos`, `roll_neg`, `pitch_pos`, `pitch_neg` | 15% each | The 4 canonical falls (side, side, front, back) with ±10° noise and random yaw |
+| `random` | 30% | Any orientation, including upside down, with random servo angles |
+| `upright` | 10% | Already standing, so the policy also learns to hold still |
+
+The robot is placed so its lowest point touches the floor, then settles for 0.5 s before the episode starts.
+
+**Reward**: uprightness + progress toward upright − tilt. Once the robot is nearly upright, it is also penalized for servo angles away from 0, height error, body/servo velocity and servo motion. It gets a +3 bonus per step in the goal pose.
+
+**Success**: goal pose (upright > 0.92, |roll|, |pitch| < 0.35 rad, servos within 0.25 rad of 0, correct height) held for 40 steps (0.8 s). Episodes are cut off after 700 steps (14 s).
+
+**Domain randomization** (on by default in training): body mass/inertia ±15%, joint damping and friction ±20%, ground friction ±20%, servo speed ±15% (battery sag), IMU noise σ = 0.015.
 
 ---
 
@@ -74,170 +80,117 @@ The environment is implemented in [`robo1_env.py`](robo1_env.py) complying with 
 
 ```
 example_robots/SelfRisingRobot/
-├── assets/                  # 3D mesh STL files (foot, arm1, arm2, servo, esp32, MPU_6050, battery)
-├── robo1.xml                # MuJoCo physics model with sensors, collisions, and masses
+├── assets/                  # STL meshes
+├── robo1.xml                # MuJoCo model
 ├── robo1_env.py             # Gymnasium environment (Robo1GetupEnv)
-├── getup_reference.py       # Reference kinematic trajectories for behavioral cloning
-├── train.py                 # Multi-core PPO training script (Stable-Baselines3)
-├── eval_policy.py           # Evaluation benchmark & 3D MuJoCo visualizer
-├── robo1_getup_ppo.zip      # Trained PPO policy checkpoint
-├── checkpoints/             # Periodic model checkpoints saved during training
-├── best_model/              # Best policy saved by EvalCallback
-├── logs/                    # Monitor CSV training logs
-└── README.md                # This workflow guide
+├── train.py                 # PPO training (Stable-Baselines3)
+├── eval_policy.py           # Benchmark: success rate & time-to-upright per case
+├── play.py                  # Trained policy in the MuJoCo viewer
+└── README.md
+
+# Created by training:
+├── robo1_getup_ppo.zip      # Final model
+├── best_model/best_model.zip  # Best model by eval success
+├── checkpoints/             # Every 250k steps
+└── logs/                    # TensorBoard + evaluations.npz
 ```
 
 ---
 
-## Step-by-Step Workflow & Bash Commands
+## Workflow & Commands
 
-### 1. Environment Setup
-
-Activate the project's Python virtual environment and navigate to the robot directory:
+### 1. Setup
 
 ```bash
-# Activate virtual environment
-source "/home/nidharshan/Documents/5th_sem/Embedded system project/sim2real-framework/venv/bin/activate"
-
-# Change into the robot workspace
 cd "/home/nidharshan/Documents/5th_sem/Embedded system project/sim2real-framework/example_robots/SelfRisingRobot"
+source ../../venv/bin/activate
+
+# Optional: TensorBoard for training curves
+pip install tensorboard
 ```
 
-Verify that the MuJoCo model loads without errors:
+### 2. Training
 
 ```bash
-python -c "import mujoco; m = mujoco.MjModel.from_xml_path('robo1.xml'); print(f'Successfully loaded robo1.xml! Total mass: {m.body_mass.sum():.4f} kg')"
+# Full training: 2M steps, 8 parallel envs, domain randomization on
+python train.py 2>&1 | tee train.log
+
+# Or run in the background (keeps going if the terminal closes)
+nohup python train.py > train.log 2>&1 &
+tail -f train.log
+
+# Watch curves (second terminal): eval/success_rate and rollout/success_rate should climb toward 1.0
+tensorboard --logdir logs
+
+# Continue training an existing model
+python train.py --resume robo1_getup_ppo.zip --timesteps 1000000
 ```
 
----
-
-### 2. Training with PPO
-
-#### A. Standard Training with Sim-to-Real Domain Randomization
-Train an agent across 4 parallel environments for 200,000 steps with mass, damping, actuator strength, and sensor noise randomization:
-
-```bash
-python train.py --timesteps 200000 --n-envs 4 --domain-rand
-```
-
-#### B. Jumpstart with Behavioral Cloning Pretraining (Recommended)
-Pre-trains the neural network weights on reference geometric righting trajectories before running PPO reinforcement learning. This accelerates convergence significantly:
-
-```bash
-python train.py --pretrain --pretrain-epochs 1500 --timesteps 200000 --n-envs 4 --domain-rand
-```
-
-#### C. Resuming / Fine-Tuning an Existing Model
-Load an existing `.zip` model checkpoint and continue training for additional steps:
-
-```bash
-python train.py --model-in robo1_getup_ppo.zip --timesteps 100000 --n-envs 4 --domain-rand
-```
-
-#### Available Training CLI Arguments:
 | Argument | Default | Description |
 |---|---|---|
-| `--timesteps` | `200000` | Total environment steps to train |
-| `--n-envs` | `4` | Number of parallel worker environments (`SubprocVecEnv`) |
-| `--lr` | `3e-4` | Learning rate for Adam optimizer |
-| `--batch-size` | `256` | Minibatch size for PPO surrogate updates |
-| `--domain-rand` | `False` | Enable Sim-to-Real Domain Randomization (mass, damping, friction, motor strength, sensor noise) |
-| `--sensor-noise` | `0.015` | MPU-6050 sensor noise standard deviation in radians (~0.85°) |
-| `--rand-pushes` | `False` | Apply occasional disturbance push forces during training |
-| `--export-onnx` | `True` | Export policy to ONNX format with numerical verification (`robo1_policy.onnx`) |
-| `--export-c` | `True` | Export policy to embedded C header (`policy_network.h`) for ESP32 |
-| `--export-mpy` | `False` | Export policy to MicroPython (`policy_network.py`) |
-| `--eval-after-train` | `True` | Run multi-pose quantitative validation benchmark post-training |
-| `--headless` | `False` | Force headless rendering backend (`MUJOCO_GL=egl` or `osmesa`) |
-| `--model-in` | `None` | Path to existing `.zip` model to resume training from |
-| `--model-out` | `robo1_getup_ppo.zip` | File path to save the final trained model |
-| `--pretrain` | `False` | Run behavioral cloning pretraining before RL |
-| `--pretrain-epochs` | `1500` | Supervised pretraining epochs |
-| `--eval-freq` | `10000` | Frequency (in steps) to evaluate policy and save best model |
+| `--timesteps` | `2000000` | Total environment steps |
+| `--n-envs` | `8` | Parallel environments (`SubprocVecEnv`); lower it on machines with fewer cores |
+| `--seed` | `0` | Random seed |
+| `--domain-rand` / `--no-domain-rand` | on | Physics + IMU noise randomization |
+| `--resume` | — | Model `.zip` to continue training |
+| `--out` | `robo1_getup_ppo` | Output path (`.zip` is added) |
+| `--log-dir` | `logs` | TensorBoard / eval log directory |
 
----
+PPO settings (in `train.py`): `lr=3e-4`, `n_steps=1024`, `batch_size=256`, `n_epochs=10`, `gamma=0.99`, `gae_lambda=0.95`, `clip_range=0.2`, 64×64 tanh MLP. The network is kept small so it fits on the ESP32.
 
-### 3. Evaluating & Visualizing the Policy
+Press Ctrl+C to stop early; the current model is still saved.
 
-#### A. Headless Benchmark across All 4 Fallen Poses
-Run quantitative evaluation across 20 trials per pose (`roll_pos`, `roll_neg`, `pitch_pos`, `pitch_neg`):
+### 3. Benchmark
 
 ```bash
-python eval_policy.py --model robo1_getup_ppo.zip --episodes 20
+python eval_policy.py                                     # robo1_getup_ppo.zip, 50 episodes per case
+python eval_policy.py --domain-rand                       # robustness on randomized physics
+python eval_policy.py --model best_model/best_model.zip   # best model saved during training
+python eval_policy.py --cases random pitch_neg --episodes 100
+python eval_policy.py --render --episodes 3               # watch the benchmark
+python eval_policy.py --json results.json                 # save results
 ```
 
-*Output summary report includes:*
-- Success rate percentage per initial pose.
-- Average time (in seconds) to achieve upright posture.
-- Final pitch/roll settling error.
+For each case it prints: success rate, time-to-upright (mean / median / std / max, successful episodes only) and mean final uprightness. The last row, "all falls", is the total over every case except `upright`.
 
-#### B. Interactive 3D MuJoCo Viewer
-Watch the robot execute the policy in real time:
+### 4. Play in the MuJoCo Viewer
 
 ```bash
-# Visualize all 4 fallen poses sequentially
-python eval_policy.py --model robo1_getup_ppo.zip --render
-
-# Visualize only a specific pose (e.g., negative roll fall)
-python eval_policy.py --model robo1_getup_ppo.zip --pose roll_neg --render --episodes 5
+python play.py                                   # random start case
+python play.py --case upright                    # start standing
+python play.py --model best_model/best_model.zip
 ```
 
----
+The policy runs continuously. Knock the robot over with **Ctrl + right-drag** on a body and it gets back up.
 
-### 4. Sim-to-Real Export (ESP32 Deployment)
+### 5. Export for the ESP32
 
-The trained policy can be exported directly to embedded formats using the framework converter.
-
-#### Option A: Export to Pure C Header (`policy_network.h`)
-For deployment using Arduino IDE or ESP-IDF (no Python runtime required on microcontroller):
+Uses the framework converter in `library/`:
 
 ```bash
-python -c "
-import sys
-sys.path.insert(0, '../../')
-from library.simtoreal.converter import convert
+# C header (Arduino / ESP-IDF)
+python -c "import sys; sys.path.insert(0, '../../'); from library.simtoreal.converter import convert; convert('robo1_getup_ppo.zip', output_path='policy_network.h', lang='c')"
 
-convert('robo1_getup_ppo.zip', output_path='policy_network.h', lang='c')
-print('Exported policy_network.h successfully!')
-"
-```
-
-#### Option B: Export to MicroPython (`policy_network.py`)
-For microcontrollers running MicroPython firmware:
-
-```bash
-python -c "
-import sys
-sys.path.insert(0, '../../')
-from library.simtoreal.converter import convert
-
-convert('robo1_getup_ppo.zip', output_path='policy_network.py', lang='python')
-print('Exported policy_network.py successfully!')
-"
+# MicroPython
+python -c "import sys; sys.path.insert(0, '../../'); from library.simtoreal.converter import convert; convert('robo1_getup_ppo.zip', output_path='policy_network.py', lang='python')"
 ```
 
 ---
 
 ## Physical Deployment on ESP32
 
-When flashing to the ESP32:
+Every 20 ms (50 Hz):
 
-1. **Sensor Loop ($50\,\text{Hz} = 20\,\text{ms}$ tick)**:
-   - Read MPU-6050 accelerometer ($a_x, a_y, a_z$) and gyroscope ($\omega_x, \omega_y, \omega_z$).
-   - Compute roll $\phi$ and pitch $\theta$ using standard complementary filter:
-     $$\theta_t = \alpha (\theta_{t-1} + \omega_y \Delta t) + (1 - \alpha) \arctan2(a_x, \sqrt{a_y^2 + a_z^2})$$
-2. **Policy Inference**:
-   - Construct observation vector: `[roll, pitch, current_servo1_rad, current_servo2_rad]`.
-   - Call `policy_forward(obs, action)`.
-3. **Actuator Update**:
-   - Compute new target: $q_i \leftarrow q_i + \text{action}[i] \times 0.08\,\text{rad}$.
-   - Clamp to limits $[-\pi/2, \pi/2]$.
-   - Convert radians to PWM microseconds ($1000\,\mu\text{s} - 2000\,\mu\text{s}$) and send to SG90 servos.
+1. **Read the MPU-6050**: compute roll and pitch with the same formulas as in the observation table, **converted to radians** (`library/simtoreal/sensors/imu.py` returns degrees). Read `az` in g.
+2. **Build the observation**: `[roll, pitch, az, target1, target2]`.
+3. **Run the policy**: `action = policy(obs)`.
+4. **Update the servos**: `target_i = clamp(target_i + action_i × 0.08, −1.55, 1.55)`, then convert radians to SG90 PWM.
 
 ---
 
-## Troubleshooting & Tips
+## Troubleshooting
 
-- **Headless server / SSH**: If running on a remote machine without a display, do not use `--render`. Evaluation will run headlessly via software stepping.
-- **Multiprocessing warning**: If running on a system with fewer than 4 CPU cores, reduce `--n-envs` (e.g. `--n-envs 2`).
-- **Policy divergence**: If training from scratch diverges, use `--pretrain` to give the network an initial behavioral prior from the reference trajectories.
+- **Fewer CPU cores**: use `--n-envs 4` (or 2).
+- **Headless machine / SSH**: training and `eval_policy.py` without `--render` need no display.
+- **Old models won't load / shape error**: models trained before the 5-value observation (4 inputs) are incompatible. Retrain.
+- **Low success on one case**: run `eval_policy.py --cases <case> --render` to watch it, then continue training with `--resume`.
