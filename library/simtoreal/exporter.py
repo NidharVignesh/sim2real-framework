@@ -76,7 +76,7 @@ def generate_header(network: dict, output_path: str, header_guard: str = "POLICY
         lines.append("    }")
         lines.append("")
         lines.append("    // swap buffers")
-        lines.append("    float* tmp = curr; curr = next; next = tmp;")
+        lines.append("    { float* tmp = curr; curr = next; next = tmp; }")
         lines.append("")
 
     lines.append(f"    for (int i = 0; i < {output_size}; i++) output[i] = curr[i];")
@@ -153,6 +153,39 @@ def generate_python_network(network: dict, output_path: str):
 
     Path(output_path).write_text("\n".join(lines))
     print(f"Generated: {output_path}")
+
+def generate_mpy_network(network: dict, output_path: str, micropython_version: str = None):
+    """Generate the MicroPython module and precompile it to .mpy bytecode with mpy-cross.
+
+    The board then only loads bytecode; compiling a large .py on the microcontroller itself
+    can run out of RAM. micropython_version (e.g. "1.22") targets older firmware; by default the
+    newest version supported by the installed mpy-cross is used.
+    """
+    import contextlib
+    import io
+    import subprocess
+    import tempfile
+
+    try:
+        import mpy_cross
+    except ImportError as e:
+        raise RuntimeError("Building .mpy files needs mpy-cross: pip install mpy-cross") from e
+    if micropython_version:
+        mpy_cross.set_version(micropython_version, None)
+
+    output_path = Path(output_path)
+    with tempfile.TemporaryDirectory() as tmp:
+        py_path = Path(tmp) / (output_path.stem + ".py")
+        with contextlib.redirect_stdout(io.StringIO()):  # the temporary .py is not an output
+            generate_python_network(network, str(py_path))
+        proc = mpy_cross.run("-s", py_path.name, "-o", str(output_path), str(py_path),
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        _, err = proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError(f"mpy-cross failed:\n{err.decode(errors='replace')}")
+    version = mpy_cross.run("--version", stdout=subprocess.PIPE).communicate()[0].decode().strip()
+    print(f"Generated: {output_path}  ({version})")
+
 
 if __name__ == "__main__":
     import argparse

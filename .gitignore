@@ -146,3 +146,6 @@ library/*.zip
 *.synctex.gz
 *.toc
 *.xdv
+
+tests/results/
+ERU Formats/

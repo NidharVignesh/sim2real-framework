@@ -1,3 +1,9 @@
+# Hardware description for Robo1 (SelfRisingRobot). Observations and actions must be listed in
+# the same order as in training (example_robots/SelfRisingRobot/robo1_env.py).
+
+control:
+  rate_hz: 50                     # the policy was trained at 50 Hz
+
 observations:
   - name: base_roll
     type: imu
@@ -5,7 +11,7 @@ observations:
     axis: roll
     scl: 22
     sda: 21
-    scale: 1.0
+    scale: 0.017453292519943295   # degrees -> radians (the policy was trained on radians)
     offset: 0.0
 
   - name: base_pitch
@@ -14,32 +20,49 @@ observations:
     axis: pitch
     scl: 22
     sda: 21
+    scale: 0.017453292519943295
+    offset: 0.0
+
+  - name: base_az                 # vertical acceleration in g: +1 upright, -1 upside down
+    type: imu
+    class: mpu6050
+    axis: az
+    scl: 22
+    sda: 21
     scale: 1.0
     offset: 0.0
 
-  - name: custom_0
-    type: custom
-    class: custom
-    scale: 1.0
-    offset: 0.0
+  - name: servo_0_target          # the policy also sees its current servo set-points
+    source: action
+    action: servo_0
 
-  - name: custom_1
-    type: custom
-    class: custom
-    scale: 1.0
-    offset: 0.0
+  - name: servo_1_target
+    source: action
+    action: servo_1
 
 actions:
   - name: servo_0
     type: servo
     class: servo
-    pin: 25
-    min: -1.0
-    max: 1.0
+    pin: 18
+    mode: delta                   # target += action * step, as in training
+    clip: [-1.0, 1.0]             # policy action space
+    step: 0.08                    # rad per step
+    min: -1.55                    # target limits in rad
+    max: 1.55
+    initial: 0.0
+    scale: 57.29577951308232      # radians -> degrees for the servo driver
+    offset: 90.0                  # servo angle for joint angle 0 (check when the robot is assembled)
 
   - name: servo_1
     type: servo
     class: servo
-    pin: 26
-    min: -1.0
-    max: 1.0
+    pin: 19
+    mode: delta
+    clip: [-1.0, 1.0]
+    step: 0.08
+    min: -1.55
+    max: 1.55
+    initial: 0.0
+    scale: 57.29577951308232
+    offset: 90.0

@@ -1,6 +1,6 @@
 # simtoreal
 
-Convert trained Reinforcement Learning policies (Stable-Baselines3 or pure PyTorch) into a ready-to-use C header (`.h`) for embedded devices such as ESP32.
+Convert trained Reinforcement Learning policies (Stable-Baselines3 or pure PyTorch) into files a microcontroller such as the ESP32 can run: precompiled MicroPython (`.mpy`, the default), MicroPython source (`.py`) or a C header (`.h`). From a YAML hardware description it also generates the on-board control loop (`main.py`).
 
 ## Features
 
@@ -37,27 +37,31 @@ pip install -e .
 ### 1. Command Line
 
 ```bash
-# Convert a Stable-Baselines3 model
+# Default: precompiled MicroPython -> policy_network.mpy
 simtoreal path/to/model.zip
 
-# Convert a pure PyTorch model
-simtoreal path/to/model.pt
+# Also generate main.py (control loop) from a hardware description
+simtoreal path/to/model.zip -c config.yaml
 
-# Specify output file name
-simtoreal path/to/model.zip -o my_policy.h
-simtoreal path/to/model.pt --output robot_policy.h
+# Other formats, only when you need them
+simtoreal path/to/model.zip -l python        # -> policy_network.py
+simtoreal path/to/model.zip -l c             # -> policy_network.h
+simtoreal path/to/model.pt -o robot_policy.h # format taken from the extension
+
+# .mpy for an older MicroPython firmware
+simtoreal path/to/model.zip --micropython-version 1.22
 ```
+
+The YAML keys (`scale`, `offset`, `source: action`, `mode: delta`, `step`, `clip`, `min`, `max`, `initial`, `control: rate_hz`) are documented at the top of `simtoreal/interface.py`; `simtoreal/config.yaml` is a complete example.
 
 ### 2. From Python
 
 ```python
 from simtoreal.converter import convert
 
-# SB3 model
-convert("ppo_model.zip", "policy_network.h")
-
-# Pure PyTorch model
-convert("actor.pt", "policy_network.h")
+convert("ppo_model.zip")                                   # policy_network.mpy
+convert("ppo_model.zip", config_path="config.yaml")        # + main.py
+convert("actor.pt", "policy_network.h")                    # C header
 ```
 
 ## Generated Header Example

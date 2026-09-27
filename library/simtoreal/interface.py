@@ -1,9 +1,49 @@
-import yaml
-import importlib
+"""Generate main.py, the on-board control loop, from a YAML hardware description.
+
+YAML schema (any key not listed here is passed to the driver class as a keyword argument):
+
+control:                    # optional
+  rate_hz: 50               # run the loop at this rate; omit to loop as fast as possible
+
+observations:               # one entry per policy input, in the order used in training
+  - name: base_roll
+    type: imu               # module to import from (e.g. imu.py on the board)
+    class: mpu6050          # class in that module; read() returns the raw value
+    scale: 0.0174533        # value given to the policy = read() * scale + offset
+    offset: 0.0
+  - name: servo_0_target
+    source: action          # the current value of one of the actions below
+    action: servo_0         # its name (or `index: 0`)
+  - name: something_else
+    type: custom            # placeholder: main.py stops with a clear error until you fill it in
+
+actions:                    # one entry per policy output, in order
+  - name: servo_0
+    type: servo
+    class: servo            # write(command) sends the command to the hardware
+    mode: absolute          # absolute (default): value = action
+                            # delta: value = previous value + action * step
+    step: 0.08              # delta only
+    clip: [-1.0, 1.0]       # optional: clip the raw network output first
+    min: -1.55              # optional: limits of the value
+    max: 1.55
+    initial: 0.0            # value before the first step (written once at start-up)
+    scale: 57.2958          # command sent to write() = value * scale + offset
+    offset: 90.0
+"""
+
 from pathlib import Path
-import inspect
+
+import yaml
+
+OBS_RESERVED = {"name", "type", "class", "scale", "offset", "source", "action", "index"}
+ACT_RESERVED = {"name", "type", "class", "scale", "offset", "mode", "step", "clip", "min", "max", "initial"}
+ACTION_MODES = ("absolute", "delta")
+
 
 def is_custom(item: dict) -> bool:
+    if str(item.get("source", "")).lower() == "action":
+        return False
     name = str(item.get("name", "")).lower()
     item_type = str(item.get("type", "")).lower()
     item_class = str(item.get("class", "")).lower()
@@ -16,112 +56,177 @@ def is_custom(item: dict) -> bool:
         return True
     return False
 
-def generate_interface(config_path: str, output_path: str="main.py"):
+
+def load_config(config_path: str) -> dict:
     with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
+        config = yaml.safe_load(f) or {}
+    config.setdefault("observations", [])
+    config.setdefault("actions", [])
+    return config
 
-    observations = config.get("observations", [])
-    actions = config.get("actions", [])
 
-    imports = []
-    has_custom = False
+def _kwargs(item: dict, reserved: set) -> str:
+    return ", ".join(f"{key}={value!r}" for key, value in item.items() if key not in reserved)
 
-    for obs in observations:
-        if is_custom(obs):
-            has_custom = True
-        else:
-            imp = f"from {obs['type']} import {obs['class']}"
+
+def _affine(expr: str, item: dict) -> str:
+    scale = item.get("scale", 1.0)
+    offset = item.get("offset", 0.0)
+    if scale != 1:
+        expr = f"{expr} * {scale!r}"
+    if offset:
+        expr = f"{expr} + {offset!r}"
+    return expr
+
+
+def _action_index(obs: dict, actions: list) -> int:
+    if "index" in obs:
+        idx = int(obs["index"])
+    elif "action" in obs:
+        names = [a.get("name") for a in actions]
+        if obs["action"] not in names:
+            raise ValueError(f"Observation {obs.get('name')!r} refers to unknown action {obs['action']!r}")
+        idx = names.index(obs["action"])
+    else:
+        raise ValueError(f"Observation {obs.get('name')!r} has source: action but no 'action' or 'index'")
+    if not 0 <= idx < len(actions):
+        raise ValueError(f"Observation {obs.get('name')!r}: action index {idx} out of range")
+    return idx
+
+
+def _limits(act: dict):
+    lo, hi = act.get("min"), act.get("max")
+    if lo is None and hi is None:
+        return None
+    return (-1e30 if lo is None else float(lo), 1e30 if hi is None else float(hi))
+
+
+def generate_interface(config_path: str, output_path: str = "main.py"):
+    config = load_config(config_path)
+    observations = config["observations"]
+    actions = config["actions"]
+    rate_hz = (config.get("control") or {}).get("rate_hz")
+
+    imports, todos = [], []
+    for item in observations + actions:
+        if is_custom(item):
+            todos.append(item.get("name", "custom"))
+        elif "type" in item and "class" in item:
+            imp = f"from {item['type']} import {item['class']}"
             if imp not in imports:
                 imports.append(imp)
 
-    for act in actions:
-        if is_custom(act):
-            has_custom = True
-        else:
-            imp = f"from {act['type']} import {act['class']}"
-            if imp not in imports:
-                imports.append(imp)
+    lines = ["# Auto-generated by simtoreal from " + Path(config_path).name, ""]
+    if rate_hz:
+        lines.append("import utime")
+    lines.append("from policy_network import policy_forward")
+    lines += imports
+    lines.append("")
+    if rate_hz:
+        lines.append(f"PERIOD_MS = {round(1000 / float(rate_hz))}  # control.rate_hz = {rate_hz}")
+        lines.append("")
 
-    if has_custom:
-        imports.append("# TODO: custom imports")
-
-    imports_str = "\n".join(imports)
-
-    observe_lines = []
+    lines.append("# observations")
     for i, obs in enumerate(observations):
         if is_custom(obs):
-            name = obs.get("name", f"custom_{i}")
-            observe_lines.append(f"# TODO: obs{i} ({name})")
-        else:
-            observe_line = f"obs{i} = {obs['class']}("
-            for key, value in obs.items():
-                if key not in ["name", "type", "class", "scale", "offset"]:
-                    observe_line += f"{key}='{value}',"
-            observe_lines.append(observe_line + ")")
-    observe_lines_str = "\n".join(observe_lines)
+            lines.append(f"# TODO: obs{i} ({obs.get('name', f'custom_{i}')})")
+        elif str(obs.get("source", "")).lower() != "action":
+            lines.append(f"obs{i} = {obs['class']}({_kwargs(obs, OBS_RESERVED)})")
+    lines.append("")
 
-    action_lines = []
+    lines.append("# actions")
+    initial = []
     for i, act in enumerate(actions):
+        mode = str(act.get("mode", "absolute")).lower()
+        if mode not in ACTION_MODES:
+            raise ValueError(f"Action {act.get('name')!r}: mode must be one of {ACTION_MODES}, got {mode!r}")
+        if mode == "delta" and "step" not in act:
+            raise ValueError(f"Action {act.get('name')!r}: mode 'delta' needs a 'step'")
+        initial.append(float(act.get("initial", 0.0)))
         if is_custom(act):
-            name = act.get("name", f"custom_{i}")
-            action_lines.append(f"# TODO: act{i} ({name})")
+            lines.append(f"# TODO: act{i} ({act.get('name', f'custom_{i}')})")
         else:
-            act_line = f"act{i} = {act['class']}("
-            for key, value in act.items():
-                if key not in ["name", "type", "class", "min", "max"]:
-                    act_line += f"{key}={value},"
-            action_lines.append(act_line + ")")
-    action_lines_str = "\n".join(action_lines)
+            lines.append(f"act{i} = {act['class']}({_kwargs(act, ACT_RESERVED)})")
+    lines.append("")
+    lines.append("# current value of each action, in the policy's units")
+    lines.append(f"action_values = {initial!r}")
+    lines.append("")
 
-    lines = []
+    lines.append("def _clip(x, lo, hi):")
+    lines.append("    return lo if x < lo else hi if x > hi else x")
+    lines.append("")
+    if any(is_custom(o) for o in observations):
+        lines.append("def _todo(name):")
+        lines.append("    raise NotImplementedError('observation ' + name + ' is still a TODO in main.py')")
+        lines.append("")
 
-    lines.append("# Auto-generated by simtoreal")
-    lines.append("")
-    lines.append("from policy_network import policy_forward")
-    if imports_str:
-        lines.append(imports_str)
-    lines.append("")
-    lines.append("#observations")
-    if observe_lines_str:
-        lines.append(observe_lines_str)
-    lines.append("")
-    lines.append("#actions")
-    if action_lines_str:
-        lines.append(action_lines_str)
-    lines.append("")
     lines.append("def observe():")
     lines.append("    return [")
     for i, obs in enumerate(observations):
         if is_custom(obs):
-            name = obs.get("name", f"custom_{i}")
-            lines.append(f"        # TODO: obs{i} ({name})")
+            lines.append(f"        _todo({obs.get('name', f'custom_{i}')!r}),")
+        elif str(obs.get("source", "")).lower() == "action":
+            lines.append(f"        {_affine(f'action_values[{_action_index(obs, actions)}]', obs)},")
         else:
-            lines.append(f"        obs{i}.read(),")
+            lines.append(f"        {_affine(f'obs{i}.read()', obs)},")
     lines.append("    ]")
     lines.append("")
+
     lines.append("def apply_actions(actions):")
-    if len(actions) == 0:
+    if not actions:
         lines.append("    pass")
-    else:
-        for i, act in enumerate(actions):
-            if is_custom(act):
-                name = act.get("name", f"custom_{i}")
-                lines.append(f"    # TODO: act{i}.write(actions[{i}]) ({name})")
-            else:
-                lines.append(f"    act{i}.write(actions[{i}])")
+    for i, act in enumerate(actions):
+        a = f"actions[{i}]"
+        if act.get("clip") is not None:
+            lo, hi = (float(v) for v in act["clip"])
+            a = f"_clip({a}, {lo!r}, {hi!r})"
+        if str(act.get("mode", "absolute")).lower() == "delta":
+            value = f"action_values[{i}] + {a} * {float(act['step'])!r}"
+        else:
+            value = a
+        limits = _limits(act)
+        if limits is not None:
+            value = f"_clip({value}, {limits[0]!r}, {limits[1]!r})"
+        lines.append(f"    action_values[{i}] = {value}")
+        command = _affine(f"action_values[{i}]", act)
+        if is_custom(act):
+            lines.append(f"    # TODO: act{i}.write({command})")
+        else:
+            lines.append(f"    act{i}.write({command})")
     lines.append("")
+
+    lines.append("def init_actuators():")
+    lines.append("    # send every actuator to its initial value before the loop starts")
+    real_actions = [(i, act) for i, act in enumerate(actions) if not is_custom(act)]
+    if not real_actions:
+        lines.append("    pass")
+    for i, act in real_actions:
+        lines.append(f"    act{i}.write({_affine(f'action_values[{i}]', act)})")
+    lines.append("")
+
     lines.append("def policy():")
     lines.append("    obs = observe()")
     lines.append("    actions = policy_forward(obs)")
     lines.append("    apply_actions(actions)")
     lines.append("")
+
     lines.append("if __name__ == '__main__':")
+    lines.append("    init_actuators()")
     lines.append("    while True:")
-    lines.append("        policy()")
+    if rate_hz:
+        lines.append("        start = utime.ticks_ms()")
+        lines.append("        policy()")
+        lines.append("        spare = PERIOD_MS - utime.ticks_diff(utime.ticks_ms(), start)")
+        lines.append("        if spare > 0:")
+        lines.append("            utime.sleep_ms(spare)")
+    else:
+        lines.append("        policy()")
     lines.append("")
 
     Path(output_path).write_text("\n".join(lines))
     print(f"Generated : {output_path}")
+    for name in todos:
+        print(f"  TODO in {output_path}: {name!r} is a custom entry - fill it in before running")
 
 
 if __name__ == "__main__":
