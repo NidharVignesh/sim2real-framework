@@ -4,7 +4,7 @@
   <option timestep="0.001" gravity="0 0 -9.81" integrator="implicitfast"/>
 
   <asset>
-    <mesh name="foot" file="foot.stl"/>
+    <mesh name="foot" file="foot.stl" scale="0.001 0.001 0.001"/>
     <mesh name="servo1" file="servo1.stl"/>
     <mesh name="arm1" file="arm1.stl"/>
     <mesh name="servo2" file="servo2.stl"/>
@@ -27,11 +27,11 @@
 
     <body name="foot" pos="0 0 0.0">
       <joint type="free"/>
-      <inertial pos="0.079759 -0.079713 0.078911" mass="0.017628"
-                fullinertia="7.8188e-6 5.9092e-6 1.1154e-5 -4.351e-8 -4.373e-7 1.226e-8"/>
-      <geom type="mesh" mesh="foot" rgba="1 0.45 0.45 1"/>
-      <geom name="foot_collision" type="box" pos="0.07810 -0.07900 0.09260"
-            size="0.03000 0.03645 0.01840" contype="0" conaffinity="0" rgba="1 0.45 0.45 0"/>
+      <inertial pos="0.076492 -0.079200 0.077837" mass="0.025356"
+                fullinertia="1.9919e-5 1.1009e-5 2.8273e-5 5.589e-10 -6.1851e-7 9.715e-9"/>
+      <geom type="mesh" mesh="foot" pos="0.0749 -0.0792 0.074206" rgba="1 0.45 0.45 1"/>
+      <geom name="foot_collision" type="box" pos="0.07490 -0.07920 0.09260"
+            size="0.03500 0.05000 0.01840" contype="0" conaffinity="0" rgba="1 0.45 0.45 0"/>
 
       <body name="battery1" pos="0 0 0">
         <inertial pos="0.06610 -0.10035 0.084206" mass="0.007"
