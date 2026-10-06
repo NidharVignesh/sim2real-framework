@@ -23,6 +23,7 @@
 
   <worldbody>
     <light name="light1" pos="1 0 0" dir="0 0 -1" directional="true"/>
+    <camera name="footer_top" pos="0.0749 -0.0792 0.30" xyaxes="0 -1 0 1 0 0"/>
     <camera name="front" pos="0.22 -0.45 0.20" xyaxes="1 0 0 0 0.35 1"/>
 
     <body name="foot" pos="0 0 0.0">
@@ -33,37 +34,50 @@
       <geom name="foot_collision" type="box" pos="0.07490 -0.07920 0.09260"
             size="0.03500 0.05000 0.01840" contype="0" conaffinity="0" rgba="1 0.45 0.45 0"/>
 
+      <!-- Matches images/footer_structure.png in the footer_top camera:
+           screen right = -Y; screen up = +X. Batteries above-left/above-right,
+           arm mount between them, buck at far right, IMU below-left, ESP32 below-right.
+           Batteries: 40 x 23 x 8 mm; 1 mm gap on each side of servo 1.
+           Servo degrees = joint degrees + 90. -->
       <body name="battery1" pos="0 0 0">
-        <inertial pos="0.06610 -0.10035 0.084206" mass="0.007"
-                  diaginertia="4.345e-7 4.345e-7 6.404e-7"/>
-        <geom type="mesh" mesh="battery" pos="-0.012 0 0" rgba="0.2 0.8 0.2 1"/>
-        <geom name="battery1_collision" type="box" pos="0.06610 -0.10035 0.084206"
-              size="0.01180 0.01180 0.00700" contype="0" conaffinity="0" rgba="0.2 0.8 0.2 0"/>
+        <inertial pos="0.08950000 -0.06050000 0.08120600" mass="0.007"
+                  diaginertia="3.45917e-7 9.70667e-7 1.24192e-6"/>
+        <geom name="battery1_visual" type="mesh" mesh="battery" pos="0.00320036 0.04015036 0.00000000" contype="0" conaffinity="0" rgba="0.2 0.8 0.2 1"/>
+        <geom name="battery1_collision" type="box" pos="0.08950000 -0.06050000 0.08120600"
+              size="0.02000 0.01150 0.00400" rgba="0.2 0.8 0.2 0"/>
       </body>
 
       <body name="battery2" pos="0 0 0">
-        <inertial pos="0.09010 -0.10035 0.084206" mass="0.007"
-                  diaginertia="4.345e-7 4.345e-7 6.404e-7"/>
-        <geom type="mesh" mesh="battery" pos="0.012 0 0" rgba="0.2 0.8 0.2 1"/>
-        <geom name="battery2_collision" type="box" pos="0.09010 -0.10035 0.084206"
-              size="0.01180 0.01180 0.00700" contype="0" conaffinity="0" rgba="0.2 0.8 0.2 0"/>
+        <inertial pos="0.08950000 -0.09750000 0.08120600" mass="0.007"
+                  diaginertia="3.45917e-7 9.70667e-7 1.24192e-6"/>
+        <geom name="battery2_visual" type="mesh" mesh="battery" pos="0.00320036 0.00315036 0.00000000" contype="0" conaffinity="0" rgba="0.2 0.8 0.2 1"/>
+        <geom name="battery2_collision" type="box" pos="0.08950000 -0.09750000 0.08120600"
+              size="0.02000 0.01150 0.00400" rgba="0.2 0.8 0.2 0"/>
       </body>
 
       <body name="mpu6050" pos="0 0 0">
-        <inertial pos="0.07810 -0.10035 0.0935" mass="0.0021"
+        <inertial pos="0.05050000 -0.04300000 0.07870600" mass="0.0021"
                   fullinertia="3.981e-8 6.683e-8 1.051e-7 -1.58e-10 6.76e-11 -3.21e-10"/>
-        <geom type="mesh" mesh="mpu6050" pos="0.07810 -0.10035 0.0935" rgba="0.1 0.3 0.8 1"/>
-        <geom name="mpu6050_collision" type="box" pos="0.07810 -0.10035 0.0935"
+        <geom name="mpu6050_visual" type="mesh" mesh="mpu6050" pos="0.05050000 -0.04300000 0.07870600" rgba="0.1 0.3 0.8 1"/>
+        <geom name="mpu6050_collision" type="box" pos="0.05050000 -0.04300000 0.07870600"
               size="0.01025 0.00800 0.00150" contype="0" conaffinity="0" rgba="0.1 0.3 0.8 0"/>
-        <site name="imu_site" pos="0.07810 -0.10035 0.0935"/>
+        <site name="imu_site" pos="0.05050000 -0.04300000 0.07870600"/>
       </body>
 
       <body name="esp32" pos="0 0 0">
-        <inertial pos="0.07845 -0.05771 0.08476" mass="0.010"
-                  fullinertia="7.834e-7 1.888e-6 2.657e-6 1.381e-10 8.117e-9 1.558e-9"/>
-        <geom type="mesh" mesh="esp32" pos="0.05260 0.20375 0.08000" euler="1.5707963 0 0" rgba="0.2 0.2 0.2 1"/>
-        <geom name="esp32_collision" type="box" pos="0.07810 -0.05770 0.08350"
-              size="0.02550 0.01405 0.00350" contype="0" conaffinity="0" rgba="0.2 0.2 0.2 0"/>
+        <!-- 45 mm length along Y, retained 28.1 mm width along X, 15 mm height.
+             Width stays within the foot; length overhangs the right edge by 4 mm. -->
+        <inertial pos="0.05495000 -0.11070000 0.08470600" mass="0.010"
+                  diaginertia="1.875e-6 8.45508e-7 2.34551e-6"/>
+        <geom name="esp32_visual" type="mesh" mesh="esp32" pos="-0.20650002 -0.13320000 0.07720600"
+              quat="0.5 0.5 0.5 0.5" contype="0" conaffinity="0" rgba="0.2 0.2 0.2 1"/>
+        <geom name="esp32_collision" type="box" pos="0.05495000 -0.11070000 0.08470600"
+              size="0.01405 0.02250 0.00750" rgba="0.2 0.2 0.2 0"/>
+      </body>
+
+      <body name="buck_converter" pos="0.08800 -0.12100 0.078206">
+        <inertial pos="0 0 0" mass="0.005" diaginertia="4.33333e-8 8.33333e-8 1.23333e-7"/>
+        <geom name="buck_converter_geom" type="box" size="0.007 0.005 0.001" rgba="0.65 0.5 0.15 1"/>
       </body>
 
       <body name="servo1" pos="0 0 0">
