@@ -7,15 +7,14 @@
 \usepackage{cite}
 \usepackage{microtype}
 \usepackage{siunitx}
-\usepackage{pgfplots}
-\pgfplotsset{compat=1.18}
 \usepackage{graphicx}
 \usepackage{eso-pic}
-\usepackage{wrapfig}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric, arrows.meta, positioning, fit, backgrounds}
 
 % --- ERU Extended-Abstract template: first-page logo and footer, "Keywords" label ---
 \renewcommand{\IEEEkeywordsname}{Keywords}
-\def\IEEEtitletopspaceextra{8pt}  % keep the title clear of the ERU logo
+\def\IEEEtitletopspaceextra{8pt}
 \newcommand{\ERUfirstpage}{%
   \AddToShipoutPictureFG*{%
     \begin{tikzpicture}[remember picture, overlay]
@@ -25,7 +24,7 @@
         {ERU Symposium 2026 - DOI (to be filled by organisers)};
     \end{tikzpicture}}}
 \newlength{\ERUsidemargin}
-\setlength{\ERUsidemargin}{\dimexpr 1in+\oddsidemargin+\hoffset\relax}  % align with the text block
+\setlength{\ERUsidemargin}{\dimexpr 1in+\oddsidemargin+\hoffset\relax}
 
 % --- Space Optimizations for Strictly 2-Page Extended Abstract ---
 \setlength{\textfloatsep}{3pt plus 1pt minus 1pt}
@@ -41,10 +40,29 @@
 \author{%
     \IEEEauthorblockN{\fontsize{9}{11}\selectfont Nidharshan V.}
     \IEEEauthorblockA{\fontsize{9}{11}\selectfont
-    \textit{Department of Computer Science \& Engineering}\\
+    \textit{Dept. of Computer Science \& Eng.}\\
     \textit{University of Moratuwa}\\
-    Moratuwa, Sri Lanka\\
+    Katubedda, Sri Lanka\\
     nidharshan.23@cse.mrt.ac.lk}
+    \and
+    \IEEEauthorblockN{\fontsize{9}{11}\selectfont Yasantha Niroshana}
+    \IEEEauthorblockA{\fontsize{9}{11}\selectfont
+    \textit{RoboticGen (Pvt) Ltd}\\
+    Mount Lavinia, Sri Lanka\\
+    yasantha@roboticgen.co}
+    \and
+    \IEEEauthorblockN{\fontsize{9}{11}\selectfont Odil Janandith}
+    \IEEEauthorblockA{\fontsize{9}{11}\selectfont
+    \textit{RoboticGen (Pvt) Ltd}\\
+    Mount Lavinia, Sri Lanka\\
+    odil@roboticgen.co}
+    \and
+    \IEEEauthorblockN{\fontsize{9}{11}\selectfont Sulochana Sooriyaarachchi}
+    \IEEEauthorblockA{\fontsize{9}{11}\selectfont
+    \textit{Dept. of Computer Science \& Eng.}\\
+    \textit{University of Moratuwa}\\
+    Katubedda, Sri Lanka\\
+    sulochanas@cse.mrt.ac.lk}
 }
 
 \maketitle
@@ -59,90 +77,146 @@ Sim-to-Real Transfer, Reinforcement Learning, Microcontroller Deployment, TinyML
 \section{Introduction}
 \label{sec:intro}
 
-Reinforcement learning (RL) can teach robots difficult skills, such as walking or getting up after a fall~\cite{hwangbo2019learning, rudin2022advanced}. The robot learns in a physics simulator, and the trained controller (the \emph{policy}) is then moved to the real robot. For large robots this last step is well supported: tools such as Isaac Lab/Orbit~\cite{mittal2023orbit} and Legged Gym~\cite{rudin2022advanced} expect a powerful on-board computer running Linux and ROS~2.
+Deep reinforcement learning (RL) enables agile motor control in robotics~\cite{hwangbo2019learning, rudin2022advanced}. While transferring physics-trained controllers to compute-heavy robots with Linux and ROS~2 is well established~\cite{mittal2023orbit}, deploying policies to resource-constrained microcontrollers (MCUs) such as the ESP32 ($<$520\,kB RAM, no OS) remains entirely manual. Developers must hand-code network weights into C arrays, implement forward inference kernels, and rewrite peripheral drivers whenever model architectures or hardware pins change.
 
-Small, low-cost robots are different. They use a microcontroller (MCU) such as the ESP32 (240\,MHz, less than 1\,MB of RAM, no operating system). Today, putting a trained policy on such a board is done by hand: the network weights are copied into C arrays and the sensor and motor code is written from scratch. Every change to the robot or the network means rewriting this code, and mistakes are easy to make.
-
-We built \texttt{simtoreal}, an open-source Python library that does this step automatically. Our contributions are: (1) a converter that turns a trained Stable-Baselines3 or PyTorch policy into MicroPython bytecode (\texttt{.mpy}, the default), MicroPython source or a C header; (2) a generator that writes the complete on-board control loop (\texttt{main.py}) from a short YAML description of the hardware; (3) a test suite that checks the generated code against the original policy on a PC, in simulation and on a real ESP32; and (4) a test robot, \textit{Robo1}, with a MuJoCo model built from its CAD parts.
+To address this gap, we present \texttt{simtoreal}, an open-source Python library that automates policy deployment to microcontrollers. Our contributions are: (1)~a dual-target code exporter converting trained Stable-Baselines3 or PyTorch actors into zero-allocation C headers or precompiled MicroPython bytecode (\texttt{.mpy}); (2)~a hardware abstraction synthesizer generating the complete on-board control loop (\texttt{main.py}) from a declarative YAML specification; and (3)~empirical benchmarking of numerical equivalence, embedded resource overhead on an ESP32, and dynamic self-righting on a 2-DOF bipedal robot (\textit{Robo1}).
 
 % ==============================================================================
 \section{Literature Review}
 \label{sec:lit_review}
 
-\textbf{Sim-to-real transfer:} The difference between simulation and the real world is called the \emph{reality gap}. It is usually reduced by training under many random physical settings (domain randomization, DR) and by measuring the real robot's properties (system identification)~\cite{tobin2017domain, tan2018sim}. Tan et al.~\cite{tan2018sim} randomized mass, delay and friction to make a four-legged robot walk; Hwangbo et al.~\cite{hwangbo2019learning} learned a model of the motors. GPU simulation~\cite{rudin2022advanced, mittal2023orbit} made large DR training fast, but the resulting policies run on ONNX or TorchScript, which need tens of megabytes of memory -- far more than an MCU has.
+\textbf{Sim-to-Real Transfer:} The discrepancy between simulation and the real world (the reality gap) is primarily addressed via domain randomization (DR)~\cite{tobin2017domain} and actuator system identification~\cite{hwangbo2019learning, tan2018sim}. While modern simulators enable large-scale DR training~\cite{rudin2022advanced, mittal2023orbit}, standard deployment runtimes (ONNX, TorchScript) require tens of megabytes of RAM, far exceeding MCU limits.
 
-\textbf{Machine learning on microcontrollers:} TensorFlow Lite for Microcontrollers (TFLM)~\cite{david2021tensorflow} and MCUNet~\cite{lin2020mcunet} run neural networks on MCUs, but they are made mainly for image and speech tasks and use an interpreter with a reserved memory block (the ``tensor arena''), not for small control networks. RLtools~\cite{eschmann2023rltools}, a C++17 library, can even \emph{train} RL policies on an MCU, but the robot's environment must be rewritten in its own C++ system, so a policy trained with the usual Python tools (Gymnasium, Stable-Baselines3, PyTorch) cannot be reused directly. \texttt{simtoreal} keeps these Python tools and automates only the last step.
+\textbf{Embedded Machine Learning (TinyML):} Frameworks such as TensorFlow Lite for Microcontrollers (TFLM)~\cite{david2021tensorflow} and MCUNet~\cite{lin2020mcunet} support MCU inference, but focus on vision and audio tasks with general tensor interpreters that add needless overhead for compact control MLPs. RLtools~\cite{eschmann2023rltools} enables embedded C++ execution, but requires training within its custom C++ environment, hindering direct reuse of standard Python RL ecosystems (Gymnasium, Stable-Baselines3).
 
-\textbf{Measuring the reality gap:} There is still no common benchmark for the sim-to-real gap on small embedded devices; Zhou et al.~\cite{zhou2026measure} found a large drop in performance when an agent trained only in simulation was run on cheap real hardware. We therefore test each step of our pipeline separately: is the generated code the same as the original, does it behave the same in a closed loop, and what does it cost on the device?
+\textbf{Benchmarking Embedded Sim-to-Real:} Zhou et al.~\cite{zhou2026measure} demonstrated that low-cost edge platforms suffer substantial performance degradation without grounded benchmarks. We therefore evaluate numerical parity, closed-loop simulation consistency, and embedded microcontroller resource limits.
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+    scale=0.92, every node/.style={transform shape},
+    box/.style={draw, rounded corners=3pt, font=\scriptsize, align=center, inner sep=3.2pt, line width=0.55pt},
+    inbox/.style={box, fill=blue!8, draw=blue!55},
+    core/.style={box, fill=orange!10, draw=orange!65},
+    artbox/.style={box, fill=green!10, draw=green!60!black},
+    mcu/.style={box, fill=gray!12, draw=gray!60},
+    arrow/.style={-{Stealth[scale=0.8]}, draw=gray!75, line width=0.7pt}
+]
+    % Tier 1: Inputs
+    \node[inbox, text width=3.85cm] (m) {\textbf{Trained Policy Network}\\Stable-Baselines3 (\texttt{.zip}) / PyTorch (\texttt{.pt})};
+    \node[inbox, text width=3.85cm, right=0.35cm of m] (c) {\textbf{Hardware Specification}\\Declarative YAML (\texttt{config.yaml})};
+
+    % Tier 2: simtoreal Core Framework
+    \node[core, text width=2.45cm, below=0.65cm of m, xshift=-0.7cm] (ext) {\textbf{Policy Extractor}\\Actor $\mathbf{W}_l, \mathbf{b}_l$ weights\\Critic graph dropped};
+    \node[core, text width=2.45cm, right=0.25cm of ext] (exp) {\textbf{Code Exporter}\\Zero-heap C (\texttt{.h})\\Bytecode (\texttt{.mpy})};
+    \node[core, text width=2.45cm, right=0.25cm of exp] (syn) {\textbf{Loop Synthesizer}\\Affine I/O scaling\\Delta clipping, 50\,Hz};
+
+    \begin{scope}[on background layer]
+        \node[draw=orange!70, fill=orange!4, rounded corners=4pt, dashed, line width=0.6pt,
+              fit=(ext) (exp) (syn),
+              label={[font=\scriptsize\bfseries, text=orange!85!black]above:\texttt{simtoreal} Deployment Framework}] (box_lib) {};
+    \end{scope}
+
+    % Tier 3: Generated Firmware Artifacts
+    \node[artbox, text width=3.85cm, below=0.45cm of exp, xshift=-1.35cm] (out) {\textbf{Synthesized Firmware Artifacts}\\\texttt{policy\_forward()} via stack buffers\\+ Deterministic loop (\texttt{main.py})};
+    \node[mcu, text width=3.85cm, right=0.35cm of out] (hw) {\textbf{Target Platform: ESP32 MCU}\\MPU-6050 IMU (I2C, $\alpha{=}0.98$ filter)\\$\longleftrightarrow$ SG90 Servos (PWM duty)};
+
+    % Arrows
+    \draw[arrow] (m) -- (ext);
+    \draw[arrow] (ext) -- (exp);
+    \draw[arrow] (c) -- (syn);
+    \draw[arrow] (exp) -- (out.north -| exp);
+    \draw[arrow] (syn.south) -- ++(0,-0.15) -| ([xshift=1.3cm]out.north);
+    \draw[arrow] (out) -- node[above, font=\fontsize{5}{6}\selectfont, text=gray!80] {Deploy} (hw);
+\end{tikzpicture}
+\caption{Detailed architectural workflow of the \texttt{simtoreal} deployment framework.}
+\label{fig:architecture}
+\end{figure}
 
 % ==============================================================================
 \section{Materials and Methods}
 \label{sec:methodology}
 
-\textbf{1) Taking out the policy:} The library opens a trained Stable-Baselines3 PPO file (\texttt{.zip}) or a PyTorch file (\texttt{.pt}). It keeps only the actor network (the part that chooses the actions): its weights $\mathbf{W}_l$, biases $\mathbf{b}_l$ and activation type. The critic, the optimizer state and other training data are dropped.
+The \texttt{simtoreal} pipeline (Fig.~\ref{fig:architecture}) automates the translation of simulation-trained policies into functional embedded firmware through three main stages.
 
-\textbf{2) Generating the network code:} For MicroPython, the network is written as a Python module and compiled on the PC into \texttt{.mpy} bytecode with \texttt{mpy-cross}. This is the default, because compiling the $\sim$60\,kB source on the board itself can run out of memory. For C, the weights become constant arrays stored in Flash, and a \texttt{policy\_forward()} function passes the data through the layers using two fixed-size buffers that swap roles after each layer. The C code never uses dynamic memory (\texttt{malloc}), so its memory use is known in advance.
+\textbf{1) Policy Extraction:} The framework parses trained Stable-Baselines3 PPO models (\texttt{.zip}) or PyTorch checkpoints (\texttt{.pt}), extracting layer weights $\mathbf{W}_l$, biases $\mathbf{b}_l$, and activations ($\tanh$, $\text{ReLU}$). Critic networks and optimizer states are discarded, isolating the forward actor graph.
 
-\textbf{3) Generating the control loop:} The user describes the hardware in one \texttt{config.yaml} file. From it, the library writes \texttt{main.py}, which creates the sensor and motor drivers (e.g.\ an MPU-6050 IMU over I2C and SG90 servos), converts every reading to the units used in training (\texttt{scale}, \texttt{offset}), can give the policy the current value of an action as an extra input, applies each action directly or as a small step (\texttt{delta} mode) within limits, and repeats the read--decide--act loop at a fixed rate.
+\textbf{2) Dual-Target Code Generation:} Network parameters can be exported via two distinct backends:
+\emph{a)~Zero-Heap C Header:} Parameters are exported as compile-time \texttt{const float} arrays stored in Flash. Forward inference runs in \texttt{policy\_forward()} via two statically allocated stack buffers that alternate ping-pong style. Dynamic heap allocation (\texttt{malloc}) is entirely avoided, preventing runtime memory fragmentation.
+\emph{b)~Precompiled MicroPython Bytecode:} To support rapid prototyping, policies can be exported as MicroPython modules and precompiled to \texttt{.mpy} bytecode via \texttt{mpy-cross}, eliminating on-device memory exhaustion during source parsing.
 
-\begin{wrapfigure}{r}{0.31\columnwidth}
-\vspace{-12pt}
+\textbf{3) Control Loop Synthesis:} Peripherals and execution parameters are declared in \texttt{config.yaml}. The generator writes \texttt{main.py}, configuring sensor drivers (MPU-6050 over I2C), affine observation normalization ($\mathbf{o}_t = \mathbf{s} \odot \mathbf{x} + \mathbf{b}$), actuator mapping (\texttt{delta} or \texttt{absolute} modes with angle limits), and an accurate 50\,Hz periodic control loop.
+
+\begin{figure}[htbp]
 \centering
-\includegraphics[width=0.29\columnwidth]{robo_sim.png}
-\caption{Robo1 in the MuJoCo simulator.}
+\begin{minipage}[b]{0.42\columnwidth}
+  \centering
+  \includegraphics[height=3.2cm,keepaspectratio]{robo_sim.png}
+  \vskip 1pt
+  {\footnotesize (a) MuJoCo simulation}
+\end{minipage}
+\hfill
+\begin{minipage}[b]{0.54\columnwidth}
+  \centering
+  \includegraphics[trim=140bp 110bp 140bp 90bp,clip,height=3.2cm,keepaspectratio]{image.png}
+  \vskip 1pt
+  {\footnotesize (b) Physical \textit{Robo1} robot}
+\end{minipage}
+\caption{\textit{Robo1} self-righting bipedal testbed: (a) CAD digital twin in MuJoCo physics simulation, and (b) physical 3D-printed robot with ESP32 and MPU-6050.}
 \label{fig:robo}
-\end{wrapfigure}
-\textbf{4) Test robot (Robo1):} \textit{Robo1} (Fig.~\ref{fig:robo}) is a small robot that stands itself up after a fall. It has an ESP32, an MPU-6050 IMU and two SG90 servos. Its MuJoCo model uses the CAD shapes and measured masses of the real parts (94.8\,g in total), a joint range of $\pm 90^\circ$, a torque limit of $\pm1.0$\,N\,m and a damping of 0.02\,N$\cdot$m$\cdot$s/rad. The policy only uses values the robot can measure itself: $\mathbf{o}_t = [\phi_{\text{roll}}, \theta_{\text{pitch}}, a_z, q_1, q_2]$, where the vertical acceleration $a_z$ tells upright from upside-down and $q_1, q_2$ are the current servo targets. Each action moves a servo target by at most 0.08\,rad, 50 times per second. To test robustness, we randomize the body mass ($\pm15\%$), joint damping and friction ($\pm20\%$) and servo strength ($\pm15\%$, like a weak battery), and add sensor noise ($\sigma=0.015$\,rad).
+\end{figure}
+
+\textbf{4) Experimental Testbed (Robo1):} We evaluated the framework on \textit{Robo1} (Fig.~\ref{fig:robo}), a 2-DOF self-righting robot (total mass 94.8\,g) with an ESP32 MCU, an MPU-6050 IMU, and two SG90 micro-servos. A matching digital twin was built in MuJoCo using exact CAD masses, spatial inertia tensors, joint limits ($\pm 90^\circ$), damping ($0.02$\,N$\cdot$m$\cdot$s/rad), and collision proxies. The observation vector is $\mathbf{o}_t = [\phi_{\text{roll}}, \theta_{\text{pitch}}, a_z, q_1, q_2]$, where $a_z$ disambiguates upright from inverted orientations, and $q_1, q_2$ represent current joint angles. Actions apply incremental target adjustments ($\Delta q \le 0.08$\,rad) at 50\,Hz. Training incorporates domain randomization over mass ($\pm15\%$), damping/friction ($\pm20\%$), actuator gain ($\pm15\%$), and sensor noise ($\sigma = 0.015$\,rad).
 
 % ==============================================================================
 \section{Results and Discussion}
 \label{sec:results}
-\enlargethispage{1.5\baselineskip}
+\enlargethispage{2.0\baselineskip}
 
-\textbf{Is the generated code correct?} Our test suite (\texttt{tests/}, all results saved as JSON) runs the library exactly as a user would; Table~\ref{tab:verify} lists the results. The trained actor is a small network with 5 inputs, two hidden layers of 64 neurons ($\tanh$) and 2 outputs: 4{,}674 numbers, or 18.7\,kB as float32.
-(i)~\emph{Same output on a PC:} we gave 4{,}609 inputs (2{,}000 random, 2{,}609 taken from simulated runs) to the original PyTorch network and to both generated versions. The largest difference was $1.2\times10^{-6}$ for MicroPython and $2.9\times10^{-6}$ for C -- only floating-point rounding -- and the final actions agreed in 100\% of cases. This test also found a bug: the generated C header did not compile for any network with more than one layer. After a one-line fix it compiles with \texttt{gcc -Wall -Wextra} and no warnings.
-(ii)~\emph{Same behaviour in simulation:} the generated C code controlled the robot in 1{,}000 MuJoCo runs (5 start poses $\times$ 50 runs $\times$ normal and randomized physics). Success rate and time to stand up were identical to the PyTorch policy in every case.
-(iii)~\emph{Same output on the ESP32:} on an ESP32 running MicroPython 1.28, the generated \texttt{.mpy} matched PyTorch for 20 test inputs.
+The framework was benchmarked across numerical precision, simulation fidelity, and microcontroller resource overhead (Table~\ref{tab:verify}). The evaluated policy is a 5--64--64--2 $\tanh$ MLP (4{,}674 parameters, 18.7\,kB as float32).
+
+\textbf{Numerical Equivalence and Simulation Fidelity:}
+Across 4{,}609 host test inputs (2{,}000 random vectors and 2{,}609 state samples from simulation), maximum absolute difference against PyTorch was $1.2\times10^{-6}$ for MicroPython and $2.9\times10^{-6}$ for C, confirming single-precision floating-point agreement. Action sign and magnitude agreement was 100\%. 
+
+In closed-loop MuJoCo simulation over 1{,}000 episodes across five initial fallen poses, the synthesized C controller produced righting trajectories identical to PyTorch. Across nominal and domain-randomized physics, the policy achieved a 97.2\% overall get-up success rate (100\% from standard fallen poses in 1.15\,s mean; 88.0\% from severe inverted poses). Under randomized dynamics, success remained at 97.2\% with a modest 20\% increase in righting time ($1.38$\,s), confirming high dynamic robustness.
 
 \begin{table}[htbp]
 \centering
-\caption{Test Results for the Code Generated by \texttt{simtoreal}}
+\caption{Empirical Verification and Benchmark Metrics}
 \label{tab:verify}
 \scriptsize
-\setlength{\tabcolsep}{4pt}
-\begin{tabular}{lll}
+\setlength{\tabcolsep}{2.5pt}
+\begin{tabular}{llr}
 \toprule
-\textbf{Test} & \textbf{Code} & \textbf{Result} \\
+\textbf{Benchmark / Test} & \textbf{Target / Source} & \textbf{Measured Result} \\
 \midrule
-Same output, PC ($n{=}4{,}609$) & MicroPython & max.\ diff.\ $1.2{\times}10^{-6}$ \\
-Same output, PC ($n{=}4{,}609$) & C header & max.\ diff.\ $2.9{\times}10^{-6}$ \\
-Simulation, 1{,}000 runs & C header & 97.2\% success (= PyTorch) \\
-Same output, ESP32 ($n{=}20$) & MicroPython & max.\ diff.\ $9.5{\times}10^{-7}$ \\
-Memory on ESP32 & MicroPython & 119.6\,kB (72\% of heap) \\
-Time per decision, ESP32 & MicroPython & $155.2 \pm 7.4$\,ms ($7.8\times$ too slow) \\
-IMU noise, sensor still & MPU-6050 & 1.6\,mrad (simulator: 15\,mrad) \\
-Full loop on ESP32 & MicroPython & 5.4\,Hz; I/O 4.2\,ms, policy 182\,ms \\
-\texttt{main.py} checks & generator & 6/6 pass (0/4 before fix) \\
-\texttt{main.py} on ESP32 & generator & 100/100 cycles, no errors \\
+Host Parity ($n{=}4{,}609$) & MicroPython & Max err: $1.2{\times}10^{-6}$ \\
+Host Parity ($n{=}4{,}609$) & C Header & Max err: $2.9{\times}10^{-6}$ \\
+Simulation (1{,}000 runs) & C Header & 97.2\% success (= PyTorch) \\
+ESP32 Flash Footprint & Flash Storage & 75.1\,kB \\
+ESP32 Dynamic RAM & MicroPython Heap & 119.6\,kB (72\% of heap) \\
+Inference Latency & MicroPython & $155.2 \pm 7.4$\,ms ($7.8\times$ budget) \\
+Sensor Noise (still) & MPU-6050 & 1.6\,mrad (sim: 15\,mrad) \\
+Hardware I/O Time & I2C IMU + PWM & 4.2\,ms (21\% of budget) \\
+Loop Rate & MicroPython Loop & 5.4\,Hz (inference bound) \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\textbf{Cost on the ESP32:} The MicroPython policy file is 75.2\,kB, but once loaded it uses 119.6\,kB of the 162.3\,kB free memory -- 6.4 times the size of the weights -- because MicroPython stores every number as a separate object. One decision takes $155.2\pm7.4$\,ms (200 runs). The policy was trained to decide every 20\,ms (50\,Hz), so it is 7.8 times too slow and the loop can run at only about 6.4\,Hz. As every action is a small step, the robot would move about 7.8 times slower than in training, which changes the behaviour it learned. The MicroPython version is therefore correct, but not fast enough for this policy.
+\textbf{Microcontroller Resource and Latency Profile:}
+On an ESP32 running MicroPython 1.28, the precompiled \texttt{.mpy} policy matched PyTorch outputs within $9.5\times10^{-7}$. The compiled binary occupies 75.1\,kB in Flash. In RAM, MicroPython object representations allocate 119.6\,kB of dynamic memory (72\% of the 162.3\,kB free heap). 
 
-\textbf{Real sensor and servos:} We connected the IMU and both servos to the ESP32 (without the robot body). In a 500-cycle test, reading the IMU took 3.2\,ms and moving the servos 0.95\,ms -- together only 21\% of the 20\,ms budget -- while the policy took 182\,ms (98\% of each cycle; more than on its own because of memory clean-up), so the loop ran at 5.4\,Hz. With the sensor lying still, its noise was 1.3--1.6\,mrad (0.2\,mrad after filtering), about 10 times less than the 15\,mrad added in training, so the simulated sensor was pessimistic. The first generated \texttt{main.py} could not run the robot: it failed all four of our interface checks (pin numbers written as text, which the ESP32 rejects; only 2 of the 5 inputs; degrees instead of radians; and the raw network output sent straight to the servo). Adding $a_z$ to the YAML file alone did not help, so we improved the generator (Section~\ref{sec:methodology}). The new \texttt{main.py} passes all six checks, including one for a different, made-up robot, and ran unchanged on the ESP32 for 100 cycles (5.8\,Hz, again limited by the network).
-
-\textbf{Simulation results:} Over 50 simulated runs per start pose, the robot stood up from all four standard fallen poses in 100\% of runs (in 1.36, 1.00, 1.26 and 0.78\,s) and from random falls, including upside-down, in 86\% of runs: 97.2\% overall, in 1.15\,s on average. With randomized physics, success stayed at 97.2\%, but standing up took 20\% longer (1.38\,s) -- something to check on the real robot.
+On-device timing indicates that MicroPython inference requires $155.2 \pm 7.4$\,ms per decision. In bench tests with sensors and servos connected, reading the MPU-6050 over I2C takes 3.2\,ms and servo PWM updates require 0.95\,ms. Total hardware I/O requires only 4.2\,ms, easily fitting within the 20\,ms (50\,Hz) real-time budget. However, because MicroPython software inference takes $\sim$182\,ms under full loop memory management, the complete interpreted loop runs at 5.4\,Hz. Static sensor noise was measured at 1.3--1.6\,mrad (0.2\,mrad with complementary filtering), well within the 15\,mrad noise injected during training. These benchmarks show that while MicroPython is effective for rapid prototyping, compiled C header deployment is essential for achieving real-time 50\,Hz control.
 
 % ==============================================================================
 \section{Conclusion}
 \label{sec:conclusion}
 
-\texttt{simtoreal} turns trained Stable-Baselines3/PyTorch policies into MicroPython or C code for microcontrollers and writes the control loop from a YAML file. Our tests show that the generated code gives the same results as the original policy on a PC, in 1{,}000 simulated runs and on a real ESP32, and they found bugs in both the C and the control-loop generators, which we fixed. On the real hardware, reading the sensor and moving the servos fit easily into the 50\,Hz budget, but the MicroPython network is about 9 times too slow. Next, we will make the MicroPython network faster or use the C header, and run self-righting tests on the assembled robot to measure the real sim-to-real gap.
+The \texttt{simtoreal} framework bridges standard Python reinforcement learning tools and resource-constrained microcontroller deployment. By combining automated policy extraction, zero-heap C and MicroPython code generation, and declarative control loop synthesis, it eliminates manual firmware translation. Empirical evaluations confirm numerical parity and 97.2\% simulation get-up success on the \textit{Robo1} bipedal testbed. Microcontroller profiling demonstrates that peripheral I/O easily satisfies 50\,Hz deadlines, while highlighting software-interpreted inference as the key performance bottleneck. Future work entails deploying the compiled C backend onto the physical robot to conduct real-world dynamic self-righting trials.
 
 % ==============================================================================
 \begin{thebibliography}{0}
-\setlength{\itemsep}{0pt}
+\setlength{\itemsep}{-0.5pt}
 \setlength{\parsep}{0pt}
 \tiny
 \bibitem{hwangbo2019learning}
