@@ -1,0 +1,47 @@
+1
+00:00:00,250 --> 00:00:07,597
+A robot can learn in simulation. But getting that learned controller onto a small board still takes manual coding.
+
+2
+00:00:08,250 --> 00:00:15,591
+Our simtoreal library bridges that gap. Give it a trained policy and a configuration describing the robot's hardware.
+
+3
+00:00:16,250 --> 00:00:23,598
+It extracts the decision network from a trained PPO model, keeping the weights needed to turn sensor readings into movements.
+
+4
+00:00:24,250 --> 00:00:32,600
+Export a C header, Python source, or compiled MicroPython bytecode. The robot runs the learned controller without the training software.
+
+5
+00:00:33,250 --> 00:00:42,606
+The configuration defines observations, actions, driver classes, and pins. The library checks input and output counts and generates the hardware setup.
+
+6
+00:00:43,250 --> 00:00:51,601
+The generated main dot py reads sensors, runs the policy, and drives the motors. Copy it, the policy, and drivers onto the ESP thirty two.
+
+7
+00:00:52,250 --> 00:00:54,938
+Here's our two-joint self-rising robot.
+
+8
+00:00:56,250 --> 00:01:08,594
+In this recorded simulation, the robot learns to recover from a fallen position. Five inputs describe its orientation and joint targets. Two outputs control the servo movements.
+
+9
+00:01:12,250 --> 00:01:20,591
+Now watch the physical robot. The ESP thirty two uses its tilt sensor and two servos to move the body toward upright.
+
+10
+00:01:24,250 --> 00:01:34,462
+This longer trial is shown at one and a half times speed. The robot keeps adjusting after the initial rise. Hardware testing shows what needs to improve.
+
+11
+00:01:39,250 --> 00:01:47,783
+After testing, retrain and export again. Reuse the hardware configuration when the wiring and policy interface stay the same.
+
+12
+00:01:50,250 --> 00:01:54,563
+simtoreal. Learn in simulation. Run on real hardware.
