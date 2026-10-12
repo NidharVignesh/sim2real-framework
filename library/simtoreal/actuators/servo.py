@@ -50,3 +50,5 @@ class servo:
 
     def write(self, angle):
         self.move(angle)
+
+
