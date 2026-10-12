@@ -159,15 +159,35 @@
 \foreach \y in {962,1000,1038,1076}{\draw[line] (45,\y)--(612,\y);}
 \draw[line] (283,905)--(283,1076) (437,905)--(437,1076);
 
-\panel{633}{878}{804}{966}{7. CONCLUSION}
-\node[anchor=north west,text width=153mm,align=left,font=\sz{24}] at (642,908) {\raggedright\textbf{Learn in simulation. Run on real hardware.} simtoreal converts the learned controller and generates the program that connects the robot\textquotesingle s sensors and motors.};
-\fill[pale,rounded corners=3mm] (633,979) rectangle (804,1085);
-\fill[teal,rounded corners=1mm] (642,986) rectangle (665,990);
-\node[anchor=west,font=\sz{27}\bfseries,text=teal] at (642,999) {EXPLORE THE PROJECT};
-\node[anchor=north west,align=left,font=\sz{21}] at (642,1011) {\href{https://github.com/NidharVignesh/sim2real-framework}{github.com/NidharVignesh/}\\\href{https://github.com/NidharVignesh/sim2real-framework}{sim2real-framework}};
-\node[anchor=north west] at (733,1018) {\href{https://github.com/NidharVignesh/sim2real-framework}{\includegraphics[width=64mm]{\paperdir qr.png}}};
-\node[anchor=west,font=\sz{24}\bfseries] at (642,1052) {SCAN TO VIEW};
-\node[anchor=west,align=left,font=\sz{21},text=muted] at (642,1071) {Code + examples\\Documentation};
+\panel{633}{878}{804}{1018}{7. RESULTS}
+% Recorded benchmarks: tests/README.md, Results so far (27 Sep 2026).
+% These measurements predate retraining; simulation success is not a physical
+% robot success rate. The generated-loop result is device test D4.
+\fill[teal] (642,905) rectangle (795,919);
+\node[anchor=west,text=white,font=\sz{22}\bfseries] at (646,912) {CHECK};
+\node[anchor=west,text=white,font=\sz{22}\bfseries] at (745,912) {RESULT};
+\fill[pale] (642,919) rectangle (795,931);
+\fill[pale] (642,943) rectangle (795,955);
+\fill[pale] (642,967) rectangle (795,979);
+\node[anchor=west,font=\sz{21}] at (646,925) {Export: maximum error};
+\node[anchor=west,font=\sz{21}\bfseries,text=teal] at (745,925) {$<3\times10^{-6}$};
+\node[anchor=west,font=\sz{21}] at (646,937) {Simulated get-up success};
+\node[anchor=west,font=\sz{21}\bfseries,text=teal] at (745,937) {97.2\%};
+\node[anchor=west,font=\sz{21}] at (646,949) {Generated ESP32 loop};
+\node[anchor=west,font=\sz{21}\bfseries,text=teal] at (745,949) {100/100 cycles};
+\node[anchor=west,font=\sz{21}] at (646,961) {MicroPython decision time};
+\node[anchor=west,font=\sz{21}\bfseries,text=teal] at (745,961) {155 ms};
+\node[anchor=west,font=\sz{21}] at (646,973) {MicroPython policy RAM};
+\node[anchor=west,font=\sz{21}\bfseries,text=teal] at (745,973) {119.6 kB};
+\foreach \y in {931,943,955,967,979}{\draw[line] (642,\y)--(795,\y);}
+\draw[line] (741,905)--(741,979);
+\node[anchor=west,font=\sz{22}\bfseries,text=teal] at (642,989) {CONCLUSION};
+\node[anchor=north west,text width=153mm,align=left,font=\sz{21}] at (642,996) {\raggedright Accurate conversion; faster inference is needed for 50 Hz control.};
+\fill[pale,rounded corners=3mm] (633,1026) rectangle (804,1085);
+\node[anchor=west,font=\sz{23}\bfseries,text=teal] at (642,1037) {EXPLORE THE PROJECT};
+\node[anchor=north west,align=left,font=\sz{19}] at (642,1046) {\href{https://github.com/NidharVignesh/sim2real-framework}{github.com/NidharVignesh/}\\\href{https://github.com/NidharVignesh/sim2real-framework}{sim2real-framework}};
+\node[anchor=north west] at (749,1033) {\href{https://github.com/NidharVignesh/sim2real-framework}{\includegraphics[width=48mm]{\paperdir qr.png}}};
+\node[anchor=west,align=left,font=\sz{20},text=muted] at (642,1074) {Scan for code + examples};
 
 % Institutional footer, drawn as vector text over the supplied template.
 \fill[navy] (100,1100) rectangle (741,1183);
